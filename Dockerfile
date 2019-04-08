@@ -14,8 +14,7 @@ COPY fmtserver /usr/bin/fmtserver
 COPY buildifier /usr/bin/buildifier
 
 # ??
-COPY /usr/bin/gofmt /usr/bin/gofmt
+COPY gofmt /usr/bin/gofmt
 
 EXPOSE 80
 CMD ["fmtserver",  "-port=80"]
-
