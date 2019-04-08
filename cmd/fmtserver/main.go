@@ -41,6 +41,7 @@ func main() {
 	var err error
 	s.JavaJar = *java
 	s.Buildifier = *buildifier
+	s.Gofmt = *gofmt
 	if err != nil {
 		log.Fatal(err)
 	}

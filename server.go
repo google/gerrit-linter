@@ -30,6 +30,7 @@ import (
 type Server struct {
 	JavaJar       string
 	Buildifier    string
+	Gofmt         string
 	languageRegex map[string]*regexp.Regexp
 	formatterMap  map[string]formatterFunc
 }
