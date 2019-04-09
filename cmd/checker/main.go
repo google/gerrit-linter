@@ -20,14 +20,22 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/rpc"
 	"net/url"
+	"os"
+	"path"
+	"strings"
+	"time"
 
 	"github.com/google/fmtserver"
+	"github.com/google/slothfs/cookie"
 )
+
+var jsonPrefix = []byte(")]}'")
 
 type File struct {
 	Status        string
@@ -42,22 +50,51 @@ type Change struct {
 }
 
 type gerrit struct {
-	Host   string
-	client http.Client
+	UserAgent string
+	URL       url.URL
+	client    http.Client
 }
 
-func (g *gerrit) GetContent(changeID string, revID string, fileID string) ([]byte, error) {
-	u := fmt.Sprintf("https://%s/changes/%s/revisions/%s/files/%s/content",
-		g.Host, url.PathEscape(changeID), revID, url.PathEscape(fileID))
-	resp, err := g.client.Get(u)
-	if err != nil {
-		return nil, fmt.Errorf("Get %s: %v", u, err)
+func (g *gerrit) getPath(p string) ([]byte, error) {
+	u := g.URL
+	u.Path = path.Join(u.Path, p)
+	if strings.HasSuffix(p, "/") && !strings.HasSuffix(u.Path, "/") {
+		// Ugh.
+		u.Path += "/"
 	}
 
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("Get %s: status %d", u, resp.StatusCode)
+	rep, err := g.client.Get(u.String())
+	if err != nil {
+		return nil, err
 	}
-	c, err := ioutil.ReadAll(resp.Body)
+	if rep.StatusCode != 200 {
+		return nil, fmt.Errorf("Get %s: status %d", u.String(), rep.StatusCode)
+	}
+
+	defer rep.Body.Close()
+	return ioutil.ReadAll(rep.Body)
+}
+
+func (g *gerrit) postPath(p string, contentType string, content []byte) ([]byte, error) {
+	u := g.URL
+	u.Path = path.Join(u.Path, p)
+
+	rep, err := g.client.Post(u.String(), contentType, bytes.NewBuffer(content))
+	if err != nil {
+		return nil, err
+	}
+	if rep.StatusCode != 200 {
+		return nil, fmt.Errorf("Get %s: status %d", u, rep.StatusCode)
+	}
+
+	defer rep.Body.Close()
+	return ioutil.ReadAll(rep.Body)
+}
+
+// GetContent returns the file content from a file in a change.
+func (g *gerrit) GetContent(changeID string, revID string, fileID string) ([]byte, error) {
+	c, err := g.getPath(fmt.Sprintf("changes/%s/revisions/%s/files/%s/content",
+		url.PathEscape(changeID), revID, url.PathEscape(fileID)))
 	if err != nil {
 		return nil, err
 	}
@@ -70,26 +107,17 @@ func (g *gerrit) GetContent(changeID string, revID string, fileID string) ([]byt
 	return dest[:n], nil
 }
 
+// GetChange returns the Change (including file contents) for a given change.
 func (g *gerrit) GetChange(changeID string, revID string) (*Change, error) {
-	u := fmt.Sprintf("https://%s/changes/%s/revisions/%s/files/",
-		g.Host, url.PathEscape(changeID), revID)
-	resp, err := g.client.Get(u)
-	if err != nil {
-		return nil, fmt.Errorf("Get %s: %v", u, err)
-	}
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("Get %s: status %d", u, resp.StatusCode)
-	}
-
-	c, err := ioutil.ReadAll(resp.Body)
+	content, err := g.getPath(fmt.Sprintf("changes/%s/revisions/%s/files/",
+		url.PathEscape(changeID), revID))
 	if err != nil {
 		return nil, err
 	}
-
-	c = bytes.TrimPrefix(c, []byte(")]}'"))
+	content = bytes.TrimPrefix(content, jsonPrefix)
 
 	files := map[string]*File{}
-	if err := json.Unmarshal(c, &files); err != nil {
+	if err := json.Unmarshal(content, &files); err != nil {
 		return nil, err
 	}
 
@@ -102,6 +130,63 @@ func (g *gerrit) GetChange(changeID string, revID string) (*Change, error) {
 		files[name].Content = c
 	}
 	return &Change{files}, nil
+}
+
+type CheckerInput struct {
+	Name        string
+	Description string
+	URL         string `json:"url"`
+	Repository  string
+	Status      string
+	Blocking    string
+	Query       string
+}
+
+type CheckerInfo struct {
+	UUID        string
+	Name        string
+	Description string
+	URL         string `json:"url"`
+	Repository  string
+	Status      string
+	Blocking    string
+	Query       string
+	Created     time.Time
+	Updated     time.Time
+}
+
+func (g *gerrit) CreateChecker() error {
+	in := CheckerInput{
+		Name:        "fmtserver",
+		Description: "check source code formatting.",
+		Status:      "ENABLED",
+		// TODO: should list all file extensions in the query?
+	}
+
+	body, err := json.Marshal(&in)
+	if err != nil {
+		return err
+	}
+
+	content, err := g.postPath("plugins/checks/checkers", "application/json", body)
+
+	if !bytes.HasPrefix(content, jsonPrefix) {
+		if len(content) > 100 {
+			content = content[:100]
+		}
+		bodyStr := string(content)
+
+		return fmt.Errorf("prefix %q not found, got %s", jsonPrefix, bodyStr)
+	}
+
+	content = bytes.TrimPrefix(content, []byte(jsonPrefix))
+	out := CheckerInfo{}
+
+	if err := json.Unmarshal(content, &out); err != nil {
+		return fmt.Errorf("Unmarshal: %v", err)
+	}
+
+	return nil
 }
 
 type gerritChecker struct {
@@ -149,15 +234,55 @@ func (c *gerritChecker) checkChange(changeID string) error {
 }
 
 func main() {
-	host := flag.String("host", "", "Gerrit host to check")
+	gerritURL := flag.String("gerrit", "", "URL to gerrit host")
 	addr := flag.String("addr", "", "Address of the fmtserver")
+	register := flag.Bool("register", false, "Register with the host")
+	list := flag.Bool("list", false, "List pending checks")
+	agent := flag.String("agent", "fmtserver", "user-agent for the fmtserver.")
+	cookieJar := flag.String("cookies", "", "path to cURL-style cookie jar file.")
 	flag.Parse()
 
-	if *host == "" {
-		log.Fatal("must set --host")
+	if *gerritURL == "" {
+		log.Fatal("must set --gerrit")
 	}
+
+	u, err := url.Parse(*gerritURL)
+	if err != nil {
+		log.Fatalf("url.Parse: %v", err)
+	}
+
 	g := &gerrit{
-		Host: *host,
+		URL: *u,
+	}
+	if nm := *cookieJar; nm != "" {
+		jar, err := cookie.NewJar(nm)
+		if err != nil {
+			log.Fatal("NewJar(%s): %v", nm, err)
+		}
+		if err := cookie.WatchJar(jar, nm); err != nil {
+			log.Printf("WatchJar: %v", err)
+			log.Println("continuing despite WatchJar failure", err)
+		}
+
+		g.client.Jar = jar
+	}
+	g.UserAgent = *agent
+
+	// Allow redirects so login forms can work.
+	g.client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		// only some User-Agents can jump the auth
+		req.Header.Set("User-Agent", g.UserAgent)
+		return nil
+	}
+
+	_ = *register
+	if *list {
+		if c, err := g.getPath("plugins/checks/checkers/"); err != nil {
+			log.Fatalf("ListCheckers: %v", err)
+		} else {
+			io.Copy(os.Stdout, bytes.NewBuffer(c))
+		}
+		os.Exit(0)
 	}
 
 	if *addr == "" {
