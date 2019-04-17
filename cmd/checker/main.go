@@ -78,13 +78,16 @@ func (g *gerrit) getPath(p string) ([]byte, error) {
 func (g *gerrit) postPath(p string, contentType string, content []byte) ([]byte, error) {
 	u := g.URL
 	u.Path = path.Join(u.Path, p)
-
+	if strings.HasSuffix(p, "/") && !strings.HasSuffix(u.Path, "/") {
+		// Ugh.
+		u.Path += "/"
+	}
 	rep, err := g.client.Post(u.String(), contentType, bytes.NewBuffer(content))
 	if err != nil {
 		return nil, err
 	}
 	if rep.StatusCode != 200 {
-		return nil, fmt.Errorf("Get %s: status %d", u, rep.StatusCode)
+		return nil, fmt.Errorf("Post %s: status %d", u.String(), rep.StatusCode)
 	}
 
 	defer rep.Body.Close()
@@ -142,6 +145,26 @@ type CheckerInput struct {
 	Query       string
 }
 
+const timeLayout = "2006-01-02 15:04:05.000000000"
+
+type Timestamp time.Time
+
+func (ts *Timestamp) MarshalJSON() ([]byte, error) {
+	t := (*time.Time)(ts)
+	return []byte("\"" + t.Format(timeLayout) + "\""), nil
+}
+
+func (ts *Timestamp) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimPrefix(b, []byte{'"'})
+	b = bytes.TrimSuffix(b, []byte{'"'})
+	t, err := time.Parse(timeLayout, string(b))
+	if err != nil {
+		return err
+	}
+	*ts = Timestamp(t)
+	return nil
+}
+
 type CheckerInfo struct {
 	UUID        string
 	Name        string
@@ -149,13 +172,13 @@ type CheckerInfo struct {
 	URL         string `json:"url"`
 	Repository  string
 	Status      string
-	Blocking    string
+	Blocking    []string
 	Query       string
-	Created     time.Time
-	Updated     time.Time
+	Created     Timestamp
+	Updated     Timestamp
 }
 
-func (g *gerrit) CreateChecker() error {
+func (g *gerrit) CreateChecker() (*CheckerInfo, error) {
 	in := CheckerInput{
 		Name:        "fmtserver",
 		Description: "check source code formatting.",
@@ -165,28 +188,33 @@ func (g *gerrit) CreateChecker() error {
 
 	body, err := json.Marshal(&in)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	content, err := g.postPath("plugins/checks/checkers", "application/json", body)
-
+	content, err := g.postPath("a/plugins/checks/checkers/", "application/json", body)
+	if err != nil {
+		return nil, err
+	}
 	if !bytes.HasPrefix(content, jsonPrefix) {
 		if len(content) > 100 {
 			content = content[:100]
 		}
 		bodyStr := string(content)
 
-		return fmt.Errorf("prefix %q not found, got %s", jsonPrefix, bodyStr)
+		return nil, fmt.Errorf("prefix %q not found, got %s", jsonPrefix, bodyStr)
 	}
 
 	content = bytes.TrimPrefix(content, []byte(jsonPrefix))
-	out := CheckerInfo{}
+	out := []CheckerInfo{}
 
 	if err := json.Unmarshal(content, &out); err != nil {
-		return fmt.Errorf("Unmarshal: %v", err)
+		return nil, fmt.Errorf("Unmarshal: %v", err)
 	}
 
-	return nil
+	for _, ch := range out {
+		log.Printf("ch %#v", ch)
+	}
+	return &out[0], nil
 }
 
 type gerritChecker struct {
@@ -239,9 +267,8 @@ func main() {
 	register := flag.Bool("register", false, "Register with the host")
 	list := flag.Bool("list", false, "List pending checks")
 	agent := flag.String("agent", "fmtserver", "user-agent for the fmtserver.")
-	cookieJar := flag.String("cookies", "", "path to cURL-style cookie jar file.")
+	cookieJar := flag.String("cookies", "", "comma separated paths to cURL-style cookie jar file.")
 	flag.Parse()
-
 	if *gerritURL == "" {
 		log.Fatal("must set --gerrit")
 	}
@@ -254,6 +281,7 @@ func main() {
 	g := &gerrit{
 		URL: *u,
 	}
+
 	if nm := *cookieJar; nm != "" {
 		jar, err := cookie.NewJar(nm)
 		if err != nil {
@@ -263,7 +291,6 @@ func main() {
 			log.Printf("WatchJar: %v", err)
 			log.Println("continuing despite WatchJar failure", err)
 		}
-
 		g.client.Jar = jar
 	}
 	g.UserAgent = *agent
@@ -275,13 +302,27 @@ func main() {
 		return nil
 	}
 
-	_ = *register
+	// Do a GET first to complete any cookie dance, because POST aren't redirected properly.
+	if c, err := g.getPath("accounts/self"); err != nil {
+		log.Fatalf("ListCheckers: %v", err)
+	} else {
+		io.Copy(os.Stdout, bytes.NewBuffer(c))
+	}
+
 	if *list {
 		if c, err := g.getPath("plugins/checks/checkers/"); err != nil {
 			log.Fatalf("ListCheckers: %v", err)
 		} else {
 			io.Copy(os.Stdout, bytes.NewBuffer(c))
 		}
+		os.Exit(0)
+	}
+	if *register {
+		ch, err := g.CreateChecker()
+		if err != nil {
+			log.Fatalf("CreateChecker: %v", err)
+		}
+		log.Printf("CreateChecker result: %v", ch)
 		os.Exit(0)
 	}
 
