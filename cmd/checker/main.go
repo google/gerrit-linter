@@ -29,7 +29,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/google/fmtserver"
 	"github.com/google/fmtserver/gerrit"
 	"github.com/google/slothfs/cookie"
 )
@@ -79,17 +78,11 @@ func CreateChecker(s *gerrit.Server, repo string) (*gerrit.CheckerInfo, error) {
 		return nil, err
 	}
 
-	log.Printf("return value: %s", string(content))
-	if err := json.Unmarshal(content, &out); err != nil {
-		return nil, fmt.Errorf("Unmarshal: %v", err)
-	}
-
-	log.Printf("created checker %#v", out)
 	return &out, nil
 }
 
 func ListCheckers(g *gerrit.Server) ([]*gerrit.CheckerInfo, error) {
-	c, err := g.GetPath("plugins/checks/checkers/")
+	c, err := g.GetPath("a/plugins/checks/checkers/")
 	if err != nil {
 		log.Fatalf("ListCheckers: %v", err)
 	}
@@ -108,50 +101,6 @@ func ListCheckers(g *gerrit.Server) ([]*gerrit.CheckerInfo, error) {
 		filtered = append(filtered, o)
 	}
 	return filtered, nil
-}
-
-type gerritChecker struct {
-	server    *gerrit.Server
-	fmtClient *rpc.Client
-}
-
-func (c *gerritChecker) checkChange(changeID string) error {
-	ch, err := c.server.GetChange(changeID, "current")
-	if err != nil {
-		return err
-	}
-	req := fmtserver.FormatRequest{}
-	for n, f := range ch.Files {
-		req.Files = append(req.Files,
-			fmtserver.File{
-				Name:    n,
-				Content: f.Content,
-			})
-	}
-	rep := fmtserver.FormatReply{}
-	if err := c.fmtClient.Call("Server.Format", &req, &rep); err != nil {
-		_, ok := err.(rpc.ServerError)
-		if ok {
-			return fmt.Errorf("server returned: %s", err)
-		}
-		return err
-	}
-
-	for _, f := range rep.Files {
-		orig := ch.Files[f.Name]
-		if orig == nil {
-			return fmt.Errorf("result had unknown file %q", f.Name)
-		}
-		if !bytes.Equal(f.Content, orig.Content) {
-			msg := f.Message
-			if msg == "" {
-				msg = "needs formatting"
-			}
-			log.Printf("file %s: %s", f.Name, f.Message)
-		}
-	}
-
-	return nil
 }
 
 func main() {
@@ -207,9 +156,13 @@ func main() {
 
 	if *list {
 		if out, err := ListCheckers(g); err != nil {
-			log.Fatalf("Lits: %v", err)
+			log.Fatalf("List: %v", err)
 		} else {
-			log.Println(out)
+			for _, ch := range out {
+				json, _ := json.Marshal(ch)
+				os.Stdout.Write(json)
+				os.Stdout.Write([]byte{'\n'})
+			}
 		}
 
 		os.Exit(0)
@@ -226,27 +179,18 @@ func main() {
 		log.Printf("CreateChecker result: %v", ch)
 		os.Exit(0)
 	}
-
 	if *addr == "" {
 		log.Fatal("must set --addr")
 	}
-
-	client, err := rpc.DialHTTP("tcp", *addr)
+	fmtClient, err := rpc.DialHTTP("tcp", *addr)
 	if err != nil {
-		log.Fatalf("DialHTTP(%s): %v", *addr, err)
+		log.Fatal(err)
 	}
 
-	gc := gerritChecker{
-		server:    g,
-		fmtClient: client,
+	gc, err := NewGerritChecker(g, fmtClient)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	if len(flag.Args()) < 1 {
-		log.Fatal("pass change IDs on command line")
-	}
-	for _, a := range flag.Args() {
-		if err := gc.checkChange(a); err != nil {
-			log.Printf("change %s: %v", a, err)
-		}
-	}
+	gc.Serve()
 }

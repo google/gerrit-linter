@@ -83,6 +83,11 @@ type CheckerInfo struct {
 	Updated     Timestamp `json:"updated"`
 }
 
+func (info *CheckerInfo) String() string {
+	out, _ := json.Marshal(info)
+	return string(out)
+}
+
 func Unmarshal(content []byte, dest interface{}) error {
 	if !bytes.HasPrefix(content, jsonPrefix) {
 		if len(content) > 100 {
@@ -94,6 +99,55 @@ func Unmarshal(content []byte, dest interface{}) error {
 	}
 
 	content = bytes.TrimPrefix(content, []byte(jsonPrefix))
-
 	return json.Unmarshal(content, dest)
+}
+
+type PendingCheckInfo struct {
+	State string
+}
+
+type CheckablePatchSetInfo struct {
+	Repository   string
+	ChangeNumber int `json:"change_number"`
+	PatchSetID   int `json:"patch_set_id"`
+}
+
+type PendingChecksInfo struct {
+	PatchSet      *CheckablePatchSetInfo       `json:"patch_set"`
+	PendingChecks map[string]*PendingCheckInfo `json:"pending_checks"`
+}
+
+func (info *PendingCheckInfo) String() string {
+	out, _ := json.Marshal(info)
+	return string(out)
+}
+
+type CheckInput struct {
+	// XXX description of this field is wrong;should be CheckUUID ?
+	CheckerUUID string    `json:"checker_uuid"`
+	State       string    `json:"state"`
+	Message     string    `json:"message"`
+	URL         string    `json:"url"`
+	Started     Timestamp `json:"started"`
+}
+
+func (in *CheckInput) String() string {
+	out, _ := json.Marshal(in)
+	return string(out)
+}
+
+type CheckInfo struct {
+	Repository    string    `json:"repository"`
+	ChangeNumber  int       `json:"change_number"`
+	PatchSetID    int       `json:"patch_set_id"`
+	CheckerUUID   string    `json:"checker_uuid"`
+	State         string    `json:"state"`
+	Message       string    `json:"message"`
+	Started       Timestamp `json:"started"`
+	Finished      Timestamp `json:"finished"`
+	Created       Timestamp `json:"created"`
+	Updated       Timestamp `json:"updated"`
+	CheckerName   string    `json:"checker_name"`
+	CheckerStatus string    `json:"checker_status"`
+	Blocking      []string  `json:"blocking"`
 }

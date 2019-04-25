@@ -31,6 +31,9 @@ type Server struct {
 	URL       url.URL
 	Client    http.Client
 
+	// Issue trace requests.
+	Debug bool
+
 	// Base64 encoded user:secret string.
 	BasicAuth string
 }
@@ -48,12 +51,7 @@ func New(u url.URL) *Server {
 	return g
 }
 
-func (g *Server) setAuth(auth []byte) {
-}
-
 func (g *Server) setRequest(req *http.Request) {
-	req.Header.Set("User-Agent", g.UserAgent)
-	req.Header.Set("Authorization", "Basic "+string(g.BasicAuth))
 }
 
 func (g *Server) GetPath(p string) ([]byte, error) {
@@ -63,17 +61,33 @@ func (g *Server) GetPath(p string) ([]byte, error) {
 		// Ugh.
 		u.Path += "/"
 	}
+	return g.Get(&u)
+}
 
+func (g *Server) Do(req *http.Request) (*http.Response, error) {
+	req.Header.Set("User-Agent", g.UserAgent)
+	req.Header.Set("Authorization", "Basic "+string(g.BasicAuth))
+
+	if g.Debug {
+		if req.URL.RawQuery != "" {
+			req.URL.RawQuery += "&trace=0x1"
+		} else {
+			req.URL.RawQuery += "trace=0x1"
+		}
+	}
+	return g.Client.Do(req)
+}
+
+func (g *Server) Get(u *url.URL) ([]byte, error) {
 	req, err := http.NewRequest("GET", u.String(), nil)
 	if err != nil {
 		return nil, err
 	}
-	g.setRequest(req)
-	rep, err := g.Client.Do(req)
+	rep, err := g.Do(req)
 	if err != nil {
 		return nil, err
 	}
-	if rep.StatusCode != 200 {
+	if rep.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("Get %s: status %d", u.String(), rep.StatusCode)
 	}
 
@@ -94,7 +108,7 @@ func (g *Server) PostPath(p string, contentType string, content []byte) ([]byte,
 	}
 	g.setRequest(req)
 	req.Header.Set("Content-Type", contentType)
-	rep, err := g.Client.Do(req)
+	rep, err := g.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -108,8 +122,12 @@ func (g *Server) PostPath(p string, contentType string, content []byte) ([]byte,
 
 // GetContent returns the file content from a file in a change.
 func (g *Server) GetContent(changeID string, revID string, fileID string) ([]byte, error) {
-	c, err := g.GetPath(fmt.Sprintf("changes/%s/revisions/%s/files/%s/content",
-		url.PathEscape(changeID), revID, url.PathEscape(fileID)))
+	u := g.URL
+	path := path.Join(u.Path, fmt.Sprintf("changes/%s/revisions/%s/files/",
+		url.PathEscape(changeID), revID))
+	u.Path = path + "/" + fileID + "/content"
+	u.RawPath = path + "/" + url.PathEscape(fileID) + "/content"
+	c, err := g.Get(&u)
 	if err != nil {
 		return nil, err
 	}
@@ -145,4 +163,46 @@ func (g *Server) GetChange(changeID string, revID string) (*Change, error) {
 		files[name].Content = c
 	}
 	return &Change{files}, nil
+}
+
+func (s *Server) PendingChecks(checkerUUID string) ([]*PendingChecksInfo, error) {
+	u := s.URL
+
+	// The trailing '/' handling is really annoying.
+	u.Path = path.Join(u.Path, "a/plugins/checks/checks.pending/") + "/"
+
+	q := "checker:" + checkerUUID
+	u.RawQuery = "query=" + url.QueryEscape(q)
+
+	content, err := s.Get(&u)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []*PendingChecksInfo
+	if err := Unmarshal(content, &out); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+func (s *Server) PostCheck(changeID string, psID int, input *CheckInput) (*CheckInfo, error) {
+	body, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := s.PostPath(fmt.Sprintf("a/changes/%s/revisions/%d/checks/", changeID, psID),
+		"application/json", body)
+	if err != nil {
+		return nil, err
+	}
+
+	var out CheckInfo
+	if err := Unmarshal(res, &out); err != nil {
+		return nil, err
+	}
+
+	return &out, nil
 }
