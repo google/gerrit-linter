@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
@@ -53,6 +54,31 @@ type gerrit struct {
 	UserAgent string
 	URL       url.URL
 	client    http.Client
+	basicAuth string
+}
+
+func newGerrit(u url.URL) *gerrit {
+	g := &gerrit{
+		URL: u,
+	}
+
+	g.client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		g.setRequest(req)
+		return nil
+	}
+
+	return g
+}
+
+func (g *gerrit) setAuth(auth []byte) {
+	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(auth)))
+	base64.StdEncoding.Encode(encoded, auth)
+	g.basicAuth = string(encoded)
+}
+
+func (g *gerrit) setRequest(req *http.Request) {
+	req.Header.Set("User-Agent", g.UserAgent)
+	req.Header.Set("Authorization", "Basic "+string(g.basicAuth))
 }
 
 func (g *gerrit) getPath(p string) ([]byte, error) {
@@ -63,7 +89,12 @@ func (g *gerrit) getPath(p string) ([]byte, error) {
 		u.Path += "/"
 	}
 
-	rep, err := g.client.Get(u.String())
+	req, err := http.NewRequest("GET", u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	g.setRequest(req)
+	rep, err := g.client.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -82,11 +113,17 @@ func (g *gerrit) postPath(p string, contentType string, content []byte) ([]byte,
 		// Ugh.
 		u.Path += "/"
 	}
-	rep, err := g.client.Post(u.String(), contentType, bytes.NewBuffer(content))
+	req, err := http.NewRequest("POST", u.String(), bytes.NewBuffer(content))
 	if err != nil {
 		return nil, err
 	}
-	if rep.StatusCode != 200 {
+	g.setRequest(req)
+	req.Header.Set("Content-Type", contentType)
+	rep, err := g.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if rep.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("Post %s: status %d", u.String(), rep.StatusCode)
 	}
 
@@ -136,18 +173,23 @@ func (g *gerrit) GetChange(changeID string, revID string) (*Change, error) {
 }
 
 type CheckerInput struct {
-	Name        string
-	Description string
-	URL         string `json:"url"`
-	Repository  string
-	Status      string
-	Blocking    string
-	Query       string
+	UUID        string   `json:"uuid"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	URL         string   `json:"url"`
+	Repository  string   `json:"repository"`
+	Status      string   `json:"status"`
+	Blocking    []string `json:"blocking"`
+	Query       string   `json:"query"`
 }
 
 const timeLayout = "2006-01-02 15:04:05.000000000"
 
 type Timestamp time.Time
+
+func (ts *Timestamp) String() string {
+	return ((time.Time)(*ts)).String()
+}
 
 func (ts *Timestamp) MarshalJSON() ([]byte, error) {
 	t := (*time.Time)(ts)
@@ -162,25 +204,47 @@ func (ts *Timestamp) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*ts = Timestamp(t)
+	log.Println("unmarshal", t)
 	return nil
 }
 
 type CheckerInfo struct {
-	UUID        string
+	UUID        string `json:"uuid"`
 	Name        string
 	Description string
 	URL         string `json:"url"`
-	Repository  string
+	Repository  string `json:"repository"`
 	Status      string
-	Blocking    []string
-	Query       string
-	Created     Timestamp
-	Updated     Timestamp
+	Blocking    []string  `json:"blocking"`
+	Query       string    `json:"query"`
+	Created     Timestamp `json:"created"`
+	Updated     Timestamp `json:"updated"`
 }
 
-func (g *gerrit) CreateChecker() (*CheckerInfo, error) {
+type wrapJar struct {
+	http.CookieJar
+}
+
+func (w *wrapJar) Cookies(u *url.URL) []*http.Cookie {
+	cs := w.CookieJar.Cookies(u)
+	//	log.Println("cookies for", u, cs)
+	return cs
+}
+
+func (w *wrapJar) SetCookies(u *url.URL, cs []*http.Cookie) {
+	w.CookieJar.SetCookies(u, cs)
+	cs = w.CookieJar.Cookies(u)
+}
+
+func (g *gerrit) CreateChecker(repo string) (*CheckerInfo, error) {
+	var uuidRandom [20]byte
+	rand.Reader.Read(uuidRandom[:])
+
+	uuid := fmt.Sprintf("fmt:%x", uuidRandom)
 	in := CheckerInput{
+		UUID:        uuid,
 		Name:        "fmtserver",
+		Repository:  repo,
 		Description: "check source code formatting.",
 		Status:      "ENABLED",
 		// TODO: should list all file extensions in the query?
@@ -205,16 +269,15 @@ func (g *gerrit) CreateChecker() (*CheckerInfo, error) {
 	}
 
 	content = bytes.TrimPrefix(content, []byte(jsonPrefix))
-	out := []CheckerInfo{}
+	out := CheckerInfo{}
 
+	log.Printf("return value: %s", string(content))
 	if err := json.Unmarshal(content, &out); err != nil {
 		return nil, fmt.Errorf("Unmarshal: %v", err)
 	}
 
-	for _, ch := range out {
-		log.Printf("ch %#v", ch)
-	}
-	return &out[0], nil
+	log.Printf("created checker %#v", out)
+	return &out, nil
 }
 
 type gerritChecker struct {
@@ -268,6 +331,8 @@ func main() {
 	list := flag.Bool("list", false, "List pending checks")
 	agent := flag.String("agent", "fmtserver", "user-agent for the fmtserver.")
 	cookieJar := flag.String("cookies", "", "comma separated paths to cURL-style cookie jar file.")
+	auth := flag.String("auth_file", "", "file containing user:password")
+	repo := flag.String("repo", "", "the repository (project) name to apply the checker to.")
 	flag.Parse()
 	if *gerritURL == "" {
 		log.Fatal("must set --gerrit")
@@ -278,9 +343,7 @@ func main() {
 		log.Fatalf("url.Parse: %v", err)
 	}
 
-	g := &gerrit{
-		URL: *u,
-	}
+	g := newGerrit(*u)
 
 	if nm := *cookieJar; nm != "" {
 		jar, err := cookie.NewJar(nm)
@@ -291,20 +354,22 @@ func main() {
 			log.Printf("WatchJar: %v", err)
 			log.Println("continuing despite WatchJar failure", err)
 		}
-		g.client.Jar = jar
+		g.client.Jar = &wrapJar{jar}
 	}
 	g.UserAgent = *agent
 
-	// Allow redirects so login forms can work.
-	g.client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		// only some User-Agents can jump the auth
-		req.Header.Set("User-Agent", g.UserAgent)
-		return nil
+	if *auth == "" {
+		log.Fatal("must set --auth_file")
+	}
+	if content, err := ioutil.ReadFile(*auth); err != nil {
+		log.Fatal(err)
+	} else {
+		g.setAuth(bytes.TrimSpace(content))
 	}
 
 	// Do a GET first to complete any cookie dance, because POST aren't redirected properly.
-	if c, err := g.getPath("accounts/self"); err != nil {
-		log.Fatalf("ListCheckers: %v", err)
+	if c, err := g.getPath("a/accounts/self"); err != nil {
+		log.Fatalf("accounts/self: %v", err)
 	} else {
 		io.Copy(os.Stdout, bytes.NewBuffer(c))
 	}
@@ -318,7 +383,10 @@ func main() {
 		os.Exit(0)
 	}
 	if *register {
-		ch, err := g.CreateChecker()
+		if *repo == "" {
+			log.Fatalf("need to set --repo")
+		}
+		ch, err := g.CreateChecker(*repo)
 		if err != nil {
 			log.Fatalf("CreateChecker: %v", err)
 		}
