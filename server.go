@@ -184,10 +184,14 @@ func (s *Server) inlineFixTool(cmd *exec.Cmd, in []File, outSink io.Writer) (out
 		cmd.Args = append(cmd.Args, f.Name)
 	}
 	cmd.Dir = tmpDir
-	cmd.Stdout = outSink
-	cmd.Stderr = outSink
+
+	var errBuf, outBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
 	log.Println("running", cmd.Args, "in", tmpDir)
 	if err := cmd.Run(); err != nil {
+		log.Println("error %v, stderr %s, stdout %s", err, errBuf.String(),
+			outBuf.String())
 		return nil, err
 	}
 
