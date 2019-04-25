@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -204,7 +203,6 @@ func (ts *Timestamp) UnmarshalJSON(b []byte) error {
 		return err
 	}
 	*ts = Timestamp(t)
-	log.Println("unmarshal", t)
 	return nil
 }
 
@@ -227,7 +225,6 @@ type wrapJar struct {
 
 func (w *wrapJar) Cookies(u *url.URL) []*http.Cookie {
 	cs := w.CookieJar.Cookies(u)
-	//	log.Println("cookies for", u, cs)
 	return cs
 }
 
@@ -236,11 +233,13 @@ func (w *wrapJar) SetCookies(u *url.URL, cs []*http.Cookie) {
 	cs = w.CookieJar.Cookies(u)
 }
 
+const checkerScheme = "fmt:"
+
 func (g *gerrit) CreateChecker(repo string) (*CheckerInfo, error) {
 	var uuidRandom [20]byte
 	rand.Reader.Read(uuidRandom[:])
 
-	uuid := fmt.Sprintf("fmt:%x", uuidRandom)
+	uuid := fmt.Sprintf("%s%x", checkerScheme, uuidRandom)
 	in := CheckerInput{
 		UUID:        uuid,
 		Name:        "fmtserver",
@@ -259,17 +258,11 @@ func (g *gerrit) CreateChecker(repo string) (*CheckerInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !bytes.HasPrefix(content, jsonPrefix) {
-		if len(content) > 100 {
-			content = content[:100]
-		}
-		bodyStr := string(content)
 
-		return nil, fmt.Errorf("prefix %q not found, got %s", jsonPrefix, bodyStr)
-	}
-
-	content = bytes.TrimPrefix(content, []byte(jsonPrefix))
 	out := CheckerInfo{}
+	if err := unmarshal(content, &out); err != nil {
+		return nil, err
+	}
 
 	log.Printf("return value: %s", string(content))
 	if err := json.Unmarshal(content, &out); err != nil {
@@ -278,6 +271,43 @@ func (g *gerrit) CreateChecker(repo string) (*CheckerInfo, error) {
 
 	log.Printf("created checker %#v", out)
 	return &out, nil
+}
+
+func unmarshal(content []byte, dest interface{}) error {
+	if !bytes.HasPrefix(content, jsonPrefix) {
+		if len(content) > 100 {
+			content = content[:100]
+		}
+		bodyStr := string(content)
+
+		return fmt.Errorf("prefix %q not found, got %s", jsonPrefix, bodyStr)
+	}
+
+	content = bytes.TrimPrefix(content, []byte(jsonPrefix))
+
+	return json.Unmarshal(content, dest)
+}
+
+func (g *gerrit) ListCheckers() ([]*CheckerInfo, error) {
+	c, err := g.getPath("plugins/checks/checkers/")
+	if err != nil {
+		log.Fatalf("ListCheckers: %v", err)
+	}
+
+	var out []*CheckerInfo
+	if err := unmarshal(c, &out); err != nil {
+		return nil, err
+	}
+
+	filtered := out[:0]
+	for _, o := range out {
+		if !strings.HasPrefix(o.UUID, checkerScheme) {
+			continue
+		}
+
+		filtered = append(filtered, o)
+	}
+	return filtered, nil
 }
 
 type gerritChecker struct {
@@ -368,20 +398,20 @@ func main() {
 	}
 
 	// Do a GET first to complete any cookie dance, because POST aren't redirected properly.
-	if c, err := g.getPath("a/accounts/self"); err != nil {
+	if _, err := g.getPath("a/accounts/self"); err != nil {
 		log.Fatalf("accounts/self: %v", err)
-	} else {
-		io.Copy(os.Stdout, bytes.NewBuffer(c))
 	}
 
 	if *list {
-		if c, err := g.getPath("plugins/checks/checkers/"); err != nil {
-			log.Fatalf("ListCheckers: %v", err)
+		if out, err := g.ListCheckers(); err != nil {
+			log.Fatalf("Lits: %v", err)
 		} else {
-			io.Copy(os.Stdout, bytes.NewBuffer(c))
+			log.Println(out)
 		}
+
 		os.Exit(0)
 	}
+
 	if *register {
 		if *repo == "" {
 			log.Fatalf("need to set --repo")
