@@ -1,4 +1,4 @@
-module github.com/google/fmtserver
+module github.com/google/gerritfmt
 
 require (
 	github.com/bazelbuild/buildtools v0.0.0-20190405103555-895625218c56 // indirect

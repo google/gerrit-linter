@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fmtserver
+package gerritfmt
 
 import (
 	"bytes"
@@ -164,7 +164,7 @@ func (s *Server) goFormat(in []File, outSink io.Writer) (out []FormattedFile, er
 }
 
 func (s *Server) inlineFixTool(cmd *exec.Cmd, in []File, outSink io.Writer) (out []FormattedFile, err error) {
-	tmpDir, err := ioutil.TempDir("", "fmtserver")
+	tmpDir, err := ioutil.TempDir("", "gerritfmt")
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +190,7 @@ func (s *Server) inlineFixTool(cmd *exec.Cmd, in []File, outSink io.Writer) (out
 	cmd.Stderr = &errBuf
 	log.Println("running", cmd.Args, "in", tmpDir)
 	if err := cmd.Run(); err != nil {
-		log.Println("error %v, stderr %s, stdout %s", err, errBuf.String(),
+		log.Printf("error %v, stderr %s, stdout %s", err, errBuf.String(),
 			outBuf.String())
 		return nil, err
 	}

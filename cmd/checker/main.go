@@ -29,7 +29,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/google/fmtserver/gerrit"
+	"github.com/google/gerritfmt/gerrit"
 	"github.com/google/slothfs/cookie"
 )
 
@@ -127,7 +127,7 @@ func main() {
 	if nm := *cookieJar; nm != "" {
 		jar, err := cookie.NewJar(nm)
 		if err != nil {
-			log.Fatal("NewJar(%s): %v", nm, err)
+			log.Fatalf("NewJar(%s): %v", nm, err)
 		}
 		if err := cookie.WatchJar(jar, nm); err != nil {
 			log.Printf("WatchJar: %v", err)

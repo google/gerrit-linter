@@ -23,7 +23,7 @@ import (
 	"os/exec"
 	"strconv"
 
-	"github.com/google/fmtserver"
+	"github.com/google/gerritfmt"
 )
 
 func main() {
@@ -37,7 +37,7 @@ func main() {
 	*gofmt, _ = exec.LookPath("gofmt")
 	flag.Parse()
 
-	s := fmtserver.NewServer()
+	s := gerritfmt.NewServer()
 	var err error
 	s.JavaJar = *java
 	s.Buildifier = *buildifier

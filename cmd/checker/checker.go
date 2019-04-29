@@ -24,8 +24,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/fmtserver"
-	"github.com/google/fmtserver/gerrit"
+	"github.com/google/gerritfmt"
+	"github.com/google/gerritfmt/gerrit"
 )
 
 type gerritChecker struct {
@@ -45,7 +45,7 @@ func NewGerritChecker(server *gerrit.Server, fmtClient *rpc.Client) (*gerritChec
 		todo:      make(chan *gerrit.PendingChecksInfo, 5),
 	}
 
-	// XXX It would be nicer to query for the scheme "fmtserver:"
+	// XXX It would be nicer to query for the scheme "gerritfmt:"
 	if out, err := ListCheckers(server); err != nil {
 		return nil, err
 	} else {
@@ -63,15 +63,15 @@ func (c *gerritChecker) checkChange(changeID string, psID int) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	req := fmtserver.FormatRequest{}
+	req := gerritfmt.FormatRequest{}
 	for n, f := range ch.Files {
 		req.Files = append(req.Files,
-			fmtserver.File{
+			gerritfmt.File{
 				Name:    n,
 				Content: f.Content,
 			})
 	}
-	rep := fmtserver.FormatReply{}
+	rep := gerritfmt.FormatReply{}
 	if err := c.fmtClient.Call("Server.Format", &req, &rep); err != nil {
 		_, ok := err.(rpc.ServerError)
 		if ok {
@@ -131,7 +131,7 @@ func (gc *gerritChecker) Serve() {
 	for p := range gc.todo {
 		// TODO: parallel.
 		if err := gc.executeCheck(p); err != nil {
-			log.Printf("executeCheck(%s): %v", p, err)
+			log.Printf("executeCheck(%v): %v", p, err)
 		}
 	}
 }
@@ -171,7 +171,7 @@ func (gc *gerritChecker) executeCheck(pc *gerrit.PendingChecksInfo) error {
 		msg = msg[:77] + "..."
 	}
 
-	fmt.Printf("status %s for %v", status, string(pc.PatchSet))
+	fmt.Printf("status %s for %v", status, pc.PatchSet)
 	for uuid := range pc.PendingChecks {
 		_, err := gc.server.PostCheck(changeID, psID,
 			&gerrit.CheckInput{

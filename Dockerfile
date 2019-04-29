@@ -7,7 +7,7 @@ WORKDIR /app
 # https://github.com/google/google-java-format/releases/download/google-java-format-1.7/google-java-format-1.7-all-deps.jar
 COPY google-java-format-1.7-all-deps.jar /usr/bin/google-java-format-all-deps.jar
 
-# go build github.com/google/fmtserver/cmd/fmtserver
+# go build github.com/google/gerritfmt/cmd/fmtserver
 COPY fmtserver /usr/bin/fmtserver
 
 # go get github.com/bazelbuild/buildtools/buildifier
