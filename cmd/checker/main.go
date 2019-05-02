@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net/rpc"
 	"net/url"
 	"os"
 	"strings"
@@ -101,7 +100,6 @@ func ListCheckers(g *gerrit.Server) ([]*gerrit.CheckerInfo, error) {
 
 func main() {
 	gerritURL := flag.String("gerrit", "", "URL to gerrit host")
-	addr := flag.String("addr", "", "Address of the fmtserver")
 	register := flag.Bool("register", false, "Register with the host")
 	update := flag.Bool("update", false, "Update an existing checker on the host")
 	list := flag.Bool("list", false, "List pending checks")
@@ -186,15 +184,8 @@ func main() {
 		log.Printf("CreateChecker result: %v", ch)
 		os.Exit(0)
 	}
-	if *addr == "" {
-		log.Fatal("must set --addr")
-	}
-	fmtClient, err := rpc.DialHTTP("tcp", *addr)
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	gc, err := NewGerritChecker(g, fmtClient)
+	gc, err := NewGerritChecker(g)
 	if err != nil {
 		log.Fatal(err)
 	}

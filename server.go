@@ -28,32 +28,69 @@ import (
 	"strings"
 )
 
-// Formatter is a definition of a formatting
-type Formatter struct {
+// Formatter is a definition of a formatting engine
+type Formatter interface {
+	// Format returns the files but formatted. All files are
+	// assumed to have the same language.
+	Format(in []File, outSink io.Writer) (out []FormattedFile, err error)
+}
+
+// FormatterConfig defines the mapping configurable
+type FormatterConfig struct {
 	// Regex is the typical filename regexp to use
 	Regex *regexp.Regexp
 
 	// Query is used to filter inside Gerrit
 	Query string
+
+	// The formatter
+	Formatter Formatter
 }
 
 // Formatters holds all the formatters supported
-var Formatters = map[string]*Formatter{
-	"java": {
-		Regex: regexp.MustCompile(`\.java$`),
-		Query: "ext:java",
-	},
-	"bzl": {
-		Regex: regexp.MustCompile(`(\.bzl|/BUILD|^BUILD)$`),
-		Query: "(ext:bzl OR file:BUILD OR file:WORKSPACE)",
-	},
-	"go": {
-		Regex: regexp.MustCompile(`\.go$`),
-		Query: "ext:go",
-	},
+var Formatters = map[string]*FormatterConfig{
 	"commitmsg": {
-		Regex: regexp.MustCompile(`^/COMMIT_MSG$`),
+		Regex:     regexp.MustCompile(`^/COMMIT_MSG$`),
+		Formatter: &commitMsgFormatter{},
 	},
+}
+
+func init() {
+	gjf, err := exec.LookPath("google-java-format")
+	if err == nil {
+		Formatters["java"] = &FormatterConfig{
+			Regex: regexp.MustCompile(`\.java$`),
+			Query: "ext:java",
+			Formatter: &toolFormatter{
+				bin:  "java",
+				args: []string{"-jar", gjf, "-i"},
+			},
+		}
+	}
+
+	bzl, err := exec.LookPath("buildifier")
+	if err == nil {
+		Formatters["bzl"] = &FormatterConfig{
+			Regex: regexp.MustCompile(`(\.bzl|/BUILD|^BUILD)$`),
+			Query: "(ext:bzl OR file:BUILD OR file:WORKSPACE)",
+			Formatter: &toolFormatter{
+				bin:  bzl,
+				args: []string{"-mode=fix"},
+			},
+		}
+	}
+
+	gofmt, err := exec.LookPath("gofmt")
+	if err == nil {
+		Formatters["go"] = &FormatterConfig{
+			Regex: regexp.MustCompile(`\.go$`),
+			Query: "ext:go",
+			Formatter: &toolFormatter{
+				bin:  gofmt,
+				args: []string{"-w"},
+			},
+		}
+	}
 }
 
 // IsSupported returns if the given language is supported.
@@ -72,30 +109,6 @@ func SupportedLanguages() []string {
 	return r
 }
 
-// Server holds the settings for a server.
-type Server struct {
-	JavaJar      string
-	Buildifier   string
-	Gofmt        string
-	formatterMap map[string]formatterFunc
-}
-
-type formatterFunc func(in []File, out io.Writer) ([]FormattedFile, error)
-
-// NewServer constructs a new server.
-func NewServer() *Server {
-	s := &Server{}
-
-	s.formatterMap = map[string]formatterFunc{
-		"java":      s.javaFormat,
-		"go":        s.goFormat,
-		"bzl":       s.bazelFormat,
-		"commitmsg": s.commitCheck,
-	}
-
-	return s
-}
-
 func splitByLang(in []File) map[string][]File {
 	res := map[string][]File{}
 	for _, f := range in {
@@ -104,8 +117,8 @@ func splitByLang(in []File) map[string][]File {
 	return res
 }
 
-// Format is the formatserver RPC endpoint.
-func (s *Server) Format(req *FormatRequest, rep *FormatReply) error {
+// Format formats all the files in the request for which a formatter exists.
+func Format(req *FormatRequest, rep *FormatReply) error {
 	for _, f := range req.Files {
 		if f.Language == "" {
 			return fmt.Errorf("file %q has empty language", f.Name)
@@ -114,7 +127,10 @@ func (s *Server) Format(req *FormatRequest, rep *FormatReply) error {
 
 	for language, fs := range splitByLang(req.Files) {
 		var buf bytes.Buffer
-		out, err := s.formatterMap[language](fs, &buf)
+		entry := Formatters[language]
+		log.Println("init", Formatters)
+
+		out, err := entry.Formatter.Format(fs, &buf)
 		if err != nil {
 			return err
 		}
@@ -127,8 +143,10 @@ func (s *Server) Format(req *FormatRequest, rep *FormatReply) error {
 	return nil
 }
 
-func (s *Server) commitCheck(in []File, outSink io.Writer) (out []FormattedFile, err error) {
-	complaint := s.checkCommitMessage(string(in[0].Content))
+type commitMsgFormatter struct{}
+
+func (f *commitMsgFormatter) Format(in []File, outSink io.Writer) (out []FormattedFile, err error) {
+	complaint := checkCommitMessage(string(in[0].Content))
 	ff := FormattedFile{}
 	ff.Name = in[0].Name
 	if complaint != "" {
@@ -140,7 +158,7 @@ func (s *Server) commitCheck(in []File, outSink io.Writer) (out []FormattedFile,
 	return out, nil
 }
 
-func (s *Server) checkCommitMessage(msg string) (complaint string) {
+func checkCommitMessage(msg string) (complaint string) {
 	lines := strings.Split(msg, "\n")
 	if len(lines) < 2 {
 		return "must have multiple lines"
@@ -161,42 +179,14 @@ func (s *Server) checkCommitMessage(msg string) (complaint string) {
 	return ""
 }
 
-func (s *Server) javaFormat(in []File, outSink io.Writer) (out []FormattedFile, err error) {
-	if _, err := os.Stat(s.JavaJar); err != nil {
-		return nil, fmt.Errorf("Stat(%q): %v", s.JavaJar, err)
-	}
-	cmd := exec.Command(
-		"java",
-		"-jar",
-		s.JavaJar,
-		"-i",
-	)
-	return s.inlineFixTool(cmd, in, outSink)
+type toolFormatter struct {
+	bin  string
+	args []string
 }
 
-func (s *Server) bazelFormat(in []File, outSink io.Writer) (out []FormattedFile, err error) {
-	if _, err := os.Stat(s.Buildifier); err != nil {
-		return nil, fmt.Errorf("Stat(%q): %v", s.Buildifier, err)
-	}
-	cmd := exec.Command(
-		s.Buildifier,
-		"-mode=fix",
-	)
-	return s.inlineFixTool(cmd, in, outSink)
-}
+func (f *toolFormatter) Format(in []File, outSink io.Writer) (out []FormattedFile, err error) {
+	cmd := exec.Command(f.bin, f.args...)
 
-func (s *Server) goFormat(in []File, outSink io.Writer) (out []FormattedFile, err error) {
-	if _, err := os.Stat(s.Buildifier); err != nil {
-		return nil, fmt.Errorf("Stat(%q): %v", s.Buildifier, err)
-	}
-	cmd := exec.Command(
-		s.Gofmt,
-		"-w",
-	)
-	return s.inlineFixTool(cmd, in, outSink)
-}
-
-func (s *Server) inlineFixTool(cmd *exec.Cmd, in []File, outSink io.Writer) (out []FormattedFile, err error) {
 	tmpDir, err := ioutil.TempDir("", "gerritfmt")
 	if err != nil {
 		return nil, err

@@ -30,8 +30,7 @@ import (
 
 // gerritChecker run formatting checks against a gerrit server.
 type gerritChecker struct {
-	server    *gerrit.Server
-	fmtClient *rpc.Client
+	server *gerrit.Server
 
 	// UUID => language
 	checkerUUIDs []string
@@ -48,11 +47,10 @@ func checkerLanguage(uuid string) (string, bool) {
 	return fields[0], true
 }
 
-func NewGerritChecker(server *gerrit.Server, fmtClient *rpc.Client) (*gerritChecker, error) {
+func NewGerritChecker(server *gerrit.Server) (*gerritChecker, error) {
 	gc := &gerritChecker{
-		server:    server,
-		fmtClient: fmtClient,
-		todo:      make(chan *gerrit.PendingChecksInfo, 5),
+		server: server,
+		todo:   make(chan *gerrit.PendingChecksInfo, 5),
 	}
 
 	if out, err := ListCheckers(server); err != nil {
@@ -92,7 +90,7 @@ func (c *gerritChecker) checkChange(changeID string, psID int, language string) 
 	}
 
 	rep := gerritfmt.FormatReply{}
-	if err := c.fmtClient.Call("Server.Format", &req, &rep); err != nil {
+	if err := gerritfmt.Format(&req, &rep); err != nil {
 		_, ok := err.(rpc.ServerError)
 		if ok {
 			return nil, fmt.Errorf("server returned: %s", err)
@@ -170,7 +168,7 @@ func (s status) String() string {
 		statusUnset:      "UNSET",
 		statusIrrelevant: "IRRELEVANT",
 		statusRunning:    "RUNNING",
-		statusFail:       "FAIL",
+		statusFail:       "FAILED",
 		statusSuccessful: "SUCCESSFUL",
 	}[s]
 }
