@@ -16,7 +16,7 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/rpc"
@@ -28,14 +28,24 @@ import (
 	"github.com/google/gerritfmt/gerrit"
 )
 
+// gerritChecker run formatting checks against a gerrit server.
 type gerritChecker struct {
 	server    *gerrit.Server
 	fmtClient *rpc.Client
 
+	// UUID => language
 	checkerUUIDs []string
 
-	// XXX The similarity between PendingChecksInfo and PendingCheckInfo is annoying.
 	todo chan *gerrit.PendingChecksInfo
+}
+
+func checkerLanguage(uuid string) (string, bool) {
+	uuid = strings.TrimPrefix(uuid, checkerScheme)
+	fields := strings.Split(uuid, "-")
+	if len(fields) != 2 {
+		return "", false
+	}
+	return fields[0], true
 }
 
 func NewGerritChecker(server *gerrit.Server, fmtClient *rpc.Client) (*gerritChecker, error) {
@@ -45,7 +55,6 @@ func NewGerritChecker(server *gerrit.Server, fmtClient *rpc.Client) (*gerritChec
 		todo:      make(chan *gerrit.PendingChecksInfo, 5),
 	}
 
-	// XXX It would be nicer to query for the scheme "gerritfmt:"
 	if out, err := ListCheckers(server); err != nil {
 		return nil, err
 	} else {
@@ -58,19 +67,30 @@ func NewGerritChecker(server *gerrit.Server, fmtClient *rpc.Client) (*gerritChec
 	return gc, nil
 }
 
-func (c *gerritChecker) checkChange(changeID string, psID int) ([]string, error) {
+var errIrrelevant = errors.New("irrelevant")
+
+func (c *gerritChecker) checkChange(changeID string, psID int, language string) ([]string, error) {
 	ch, err := c.server.GetChange(changeID, strconv.Itoa(psID))
 	if err != nil {
 		return nil, err
 	}
 	req := gerritfmt.FormatRequest{}
 	for n, f := range ch.Files {
+		if !gerritfmt.Formatters[language].Regex.MatchString(n) {
+			continue
+		}
+
 		req.Files = append(req.Files,
 			gerritfmt.File{
-				Name:    n,
-				Content: f.Content,
+				Language: language,
+				Name:     n,
+				Content:  f.Content,
 			})
 	}
+	if len(req.Files) == 0 {
+		return nil, errIrrelevant
+	}
+
 	rep := gerritfmt.FormatReply{}
 	if err := c.fmtClient.Call("Server.Format", &req, &rep); err != nil {
 		_, ok := err.(rpc.ServerError)
@@ -116,7 +136,6 @@ func (c *gerritChecker) pendingLoop() {
 			for _, pc := range pending {
 				select {
 				case c.todo <- pc:
-					log.Println("posted check.")
 				default:
 					log.Println("too busy; dropping pending check.")
 				}
@@ -129,57 +148,84 @@ func (c *gerritChecker) pendingLoop() {
 
 func (gc *gerritChecker) Serve() {
 	for p := range gc.todo {
-		// TODO: parallel.
+		// TODO: parallelism?.
 		if err := gc.executeCheck(p); err != nil {
 			log.Printf("executeCheck(%v): %v", p, err)
 		}
 	}
 }
 
+type status int
+
+var (
+	statusUnset      status = 0
+	statusIrrelevant status = 4
+	statusRunning    status = 1
+	statusFail       status = 2
+	statusSuccessful status = 3
+)
+
+func (s status) String() string {
+	return map[status]string{
+		statusUnset:      "UNSET",
+		statusIrrelevant: "IRRELEVANT",
+		statusRunning:    "RUNNING",
+		statusFail:       "FAIL",
+		statusSuccessful: "SUCCESSFUL",
+	}[s]
+}
+
 func (gc *gerritChecker) executeCheck(pc *gerrit.PendingChecksInfo) error {
-	out, _ := json.Marshal(pc)
-	fmt.Println("checking", string(out))
+	log.Println("checking", pc)
 
 	changeID := strconv.Itoa(pc.PatchSet.ChangeNumber)
 	psID := pc.PatchSet.PatchSetID
 	for uuid := range pc.PendingChecks {
+		now := gerrit.Timestamp(time.Now())
 		checkInput := gerrit.CheckInput{
 			CheckerUUID: uuid,
-			State:       "RUNNING",
-			Started:     gerrit.Timestamp(time.Now()),
+			State:       statusRunning.String(),
+			Started:     &now,
 		}
+		log.Printf("posted %s", &checkInput)
 		_, err := gc.server.PostCheck(
 			changeID, psID, &checkInput)
 		if err != nil {
 			return err
 		}
-	}
 
-	status := "SUCCESSFUL"
-	msgs, err := gc.checkChange(changeID, psID)
-	if err != nil {
-		msgs = []string{fmt.Sprintf("tool failure: %v", err)}
+		var status status
+		msg := ""
+		lang, ok := checkerLanguage(uuid)
+		if !ok {
+			return fmt.Errorf("uuid %q had unknown language", uuid)
+		} else {
+			msgs, err := gc.checkChange(changeID, psID, lang)
+			if err == errIrrelevant {
+				status = statusIrrelevant
+			} else if err != nil {
+				status = statusFail
+				msgs = []string{fmt.Sprintf("tool failure: %v", err)}
+			} else if len(msgs) == 0 {
+				status = statusSuccessful
+			} else {
+				status = statusFail
+			}
+			msg = strings.Join(msgs, ", ")
+			if len(msg) > 80 {
+				msg = msg[:77] + "..."
+			}
+		}
 
-		// XXX would be nice to have a "TOOL_FAILURE" status
-		status = "FAILED"
-	} else if len(msgs) > 0 {
-		status = "FAILED"
-	}
+		log.Printf("status %s for lang %s on %v", status, lang, pc.PatchSet)
+		checkInput = gerrit.CheckInput{
+			CheckerUUID: uuid,
+			State:       status.String(),
+			Message:     msg,
+		}
+		log.Printf("posted %s", &checkInput)
 
-	msg := strings.Join(msgs, ", ")
-	if len(msg) > 80 {
-		msg = msg[:77] + "..."
-	}
-
-	fmt.Printf("status %s for %v", status, pc.PatchSet)
-	for uuid := range pc.PendingChecks {
-		_, err := gc.server.PostCheck(changeID, psID,
-			&gerrit.CheckInput{
-				CheckerUUID: uuid,
-				State:       status,
-				Message:     msg,
-			})
-		if err != nil {
+		if _, err := gc.server.PostCheck(changeID, psID, &checkInput); err != nil {
 			return err
 		}
 	}

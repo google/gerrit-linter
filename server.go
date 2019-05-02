@@ -24,64 +24,97 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
+// Formatter is a definition of a formatting
+type Formatter struct {
+	// Regex is the typical filename regexp to use
+	Regex *regexp.Regexp
+
+	// Query is used to filter inside Gerrit
+	Query string
+}
+
+// Formatters holds all the formatters supported
+var Formatters = map[string]*Formatter{
+	"java": {
+		Regex: regexp.MustCompile(`\.java$`),
+		Query: "ext:java",
+	},
+	"bzl": {
+		Regex: regexp.MustCompile(`(\.bzl|/BUILD|^BUILD)$`),
+		Query: "(ext:bzl OR file:BUILD OR file:WORKSPACE)",
+	},
+	"go": {
+		Regex: regexp.MustCompile(`\.go$`),
+		Query: "ext:go",
+	},
+	"commitmsg": {
+		Regex: regexp.MustCompile(`^/COMMIT_MSG$`),
+	},
+}
+
+// IsSupported returns if the given language is supported.
+func IsSupported(lang string) bool {
+	_, ok := Formatters[lang]
+	return ok
+}
+
+// SupportedLanguages returns a list of languages.
+func SupportedLanguages() []string {
+	var r []string
+	for l := range Formatters {
+		r = append(r, l)
+	}
+	sort.Strings(r)
+	return r
+}
+
+// Server holds the settings for a server.
 type Server struct {
-	JavaJar       string
-	Buildifier    string
-	Gofmt         string
-	languageRegex map[string]*regexp.Regexp
-	formatterMap  map[string]formatterFunc
+	JavaJar      string
+	Buildifier   string
+	Gofmt        string
+	formatterMap map[string]formatterFunc
 }
 
 type formatterFunc func(in []File, out io.Writer) ([]FormattedFile, error)
 
+// NewServer constructs a new server.
 func NewServer() *Server {
-	type formatter struct {
-		lang  string
-		regex *regexp.Regexp
-		fun   formatterFunc
+	s := &Server{}
+
+	s.formatterMap = map[string]formatterFunc{
+		"java":      s.javaFormat,
+		"go":        s.goFormat,
+		"bzl":       s.bazelFormat,
+		"commitmsg": s.commitCheck,
 	}
 
-	s := &Server{
-		languageRegex: map[string]*regexp.Regexp{},
-		formatterMap:  map[string]formatterFunc{},
-	}
-
-	formatters := []formatter{
-		{"java", regexp.MustCompile(`\.java$`), s.javaFormat},
-		{"bazel", regexp.MustCompile(`(\.bzl|/BUILD|^BUILD)$`), s.bazelFormat},
-		{"go", regexp.MustCompile(`\.go$`), s.goFormat},
-		{"commit-msg", regexp.MustCompile(`^/COMMIT_MSG$`), s.commitCheck},
-	}
-
-	for _, l := range formatters {
-		s.languageRegex[l.lang] = l.regex
-	}
-	for _, l := range formatters {
-		s.formatterMap[l.lang] = l.fun
-	}
 	return s
 }
 
-func (s *Server) splitByLang(in []File) map[string][]File {
+func splitByLang(in []File) map[string][]File {
 	res := map[string][]File{}
 	for _, f := range in {
-		for lang, regex := range s.languageRegex {
-			if regex.MatchString(f.Name) {
-				res[lang] = append(res[lang], f)
-				break
-			}
-		}
+		res[f.Language] = append(res[f.Language], f)
 	}
 	return res
 }
 
+// Format is the formatserver RPC endpoint.
 func (s *Server) Format(req *FormatRequest, rep *FormatReply) error {
-	for lang, files := range s.splitByLang(req.Files) {
+	for _, f := range req.Files {
+		if f.Language == "" {
+			return fmt.Errorf("file %q has empty language", f.Name)
+		}
+	}
+
+	for language, fs := range splitByLang(req.Files) {
 		var buf bytes.Buffer
-		out, err := s.formatterMap[lang](files, &buf)
+		out, err := s.formatterMap[language](fs, &buf)
 		if err != nil {
 			return err
 		}
@@ -158,7 +191,7 @@ func (s *Server) goFormat(in []File, outSink io.Writer) (out []FormattedFile, er
 	}
 	cmd := exec.Command(
 		s.Gofmt,
-		"-mode=fix",
+		"-w",
 	)
 	return s.inlineFixTool(cmd, in, outSink)
 }

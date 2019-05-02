@@ -46,6 +46,9 @@ type CheckerInput struct {
 	Query       string   `json:"query"`
 }
 
+// Gerrit doesn't use the format with "T" in the middle, so must
+// define a custom serializer.
+
 const timeLayout = "2006-01-02 15:04:05.000000000"
 
 type Timestamp time.Time
@@ -54,10 +57,14 @@ func (ts *Timestamp) String() string {
 	return ((time.Time)(*ts)).String()
 }
 
+var _ = (json.Marshaler)((*Timestamp)(nil))
+
 func (ts *Timestamp) MarshalJSON() ([]byte, error) {
 	t := (*time.Time)(ts)
 	return []byte("\"" + t.Format(timeLayout) + "\""), nil
 }
+
+var _ = (json.Unmarshaler)((*Timestamp)(nil))
 
 func (ts *Timestamp) UnmarshalJSON(b []byte) error {
 	b = bytes.TrimPrefix(b, []byte{'"'})
@@ -88,6 +95,7 @@ func (info *CheckerInfo) String() string {
 	return string(out)
 }
 
+// Unmarshal unmarshals Gerrit JSON, stripping the security prefix.
 func Unmarshal(content []byte, dest interface{}) error {
 	if !bytes.HasPrefix(content, jsonPrefix) {
 		if len(content) > 100 {
@@ -112,6 +120,11 @@ type CheckablePatchSetInfo struct {
 	PatchSetID   int `json:"patch_set_id"`
 }
 
+func (in *CheckablePatchSetInfo) String() string {
+	out, _ := json.Marshal(in)
+	return string(out)
+}
+
 type PendingChecksInfo struct {
 	PatchSet      *CheckablePatchSetInfo       `json:"patch_set"`
 	PendingChecks map[string]*PendingCheckInfo `json:"pending_checks"`
@@ -123,12 +136,11 @@ func (info *PendingCheckInfo) String() string {
 }
 
 type CheckInput struct {
-	// XXX description of this field is wrong;should be CheckUUID ?
-	CheckerUUID string    `json:"checker_uuid"`
-	State       string    `json:"state"`
-	Message     string    `json:"message"`
-	URL         string    `json:"url"`
-	Started     Timestamp `json:"started"`
+	CheckerUUID string     `json:"checker_uuid"`
+	State       string     `json:"state"`
+	Message     string     `json:"message"`
+	URL         string     `json:"url"`
+	Started     *Timestamp `json:"started"`
 }
 
 func (in *CheckInput) String() string {

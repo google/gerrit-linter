@@ -16,51 +16,37 @@ package main
 
 import (
 	"bytes"
-	"crypto/rand"
+	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"net/rpc"
 	"net/url"
 	"os"
 	"strings"
 
+	"github.com/google/gerritfmt"
 	"github.com/google/gerritfmt/gerrit"
 	"github.com/google/slothfs/cookie"
 )
 
-type wrapJar struct {
-	http.CookieJar
-}
-
-func (w *wrapJar) Cookies(u *url.URL) []*http.Cookie {
-	cs := w.CookieJar.Cookies(u)
-	return cs
-}
-
-func (w *wrapJar) SetCookies(u *url.URL, cs []*http.Cookie) {
-	w.CookieJar.SetCookies(u, cs)
-	cs = w.CookieJar.Cookies(u)
-}
-
 const checkerScheme = "fmt:"
 
-func CreateChecker(s *gerrit.Server, repo string) (*gerrit.CheckerInfo, error) {
-	var uuidRandom [20]byte
-	rand.Reader.Read(uuidRandom[:])
+func PostChecker(s *gerrit.Server, repo, language string, create bool) (*gerrit.CheckerInfo, error) {
+	hash := sha1.New()
+	hash.Write([]byte(repo))
 
-	uuid := fmt.Sprintf("%s%x", checkerScheme, uuidRandom)
+	uuid := fmt.Sprintf("%s%s-%x", checkerScheme, language, hash.Sum(nil))
 	in := gerrit.CheckerInput{
 		UUID:        uuid,
-		Name:        "fmtserver",
+		Name:        language + " formatting",
 		Repository:  repo,
 		Description: "check source code formatting.",
 		Status:      "ENABLED",
-		// TODO: should list all file extensions in the query?
+		Query:       gerritfmt.Formatters[language].Query,
 	}
 
 	body, err := json.Marshal(&in)
@@ -68,7 +54,13 @@ func CreateChecker(s *gerrit.Server, repo string) (*gerrit.CheckerInfo, error) {
 		return nil, err
 	}
 
-	content, err := s.PostPath("a/plugins/checks/checkers/", "application/json", body)
+	log.Println(string(body))
+
+	path := "a/plugins/checks/checkers/"
+	if !create {
+		path += uuid
+	}
+	content, err := s.PostPath(path, "application/json", body)
 	if err != nil {
 		return nil, err
 	}
@@ -81,6 +73,7 @@ func CreateChecker(s *gerrit.Server, repo string) (*gerrit.CheckerInfo, error) {
 	return &out, nil
 }
 
+// ListCheckers returns all the checkers that conform to our scheme.
 func ListCheckers(g *gerrit.Server) ([]*gerrit.CheckerInfo, error) {
 	c, err := g.GetPath("a/plugins/checks/checkers/")
 	if err != nil {
@@ -97,6 +90,9 @@ func ListCheckers(g *gerrit.Server) ([]*gerrit.CheckerInfo, error) {
 		if !strings.HasPrefix(o.UUID, checkerScheme) {
 			continue
 		}
+		if _, ok := checkerLanguage(o.UUID); !ok {
+			continue
+		}
 
 		filtered = append(filtered, o)
 	}
@@ -107,11 +103,13 @@ func main() {
 	gerritURL := flag.String("gerrit", "", "URL to gerrit host")
 	addr := flag.String("addr", "", "Address of the fmtserver")
 	register := flag.Bool("register", false, "Register with the host")
+	update := flag.Bool("update", false, "Update an existing checker on the host")
 	list := flag.Bool("list", false, "List pending checks")
 	agent := flag.String("agent", "fmtserver", "user-agent for the fmtserver.")
 	cookieJar := flag.String("cookies", "", "comma separated paths to cURL-style cookie jar file.")
 	authFile := flag.String("auth_file", "", "file containing user:password")
 	repo := flag.String("repo", "", "the repository (project) name to apply the checker to.")
+	language := flag.String("language", "", "the language that the checker should apply to.")
 	flag.Parse()
 	if *gerritURL == "" {
 		log.Fatal("must set --gerrit")
@@ -133,7 +131,7 @@ func main() {
 			log.Printf("WatchJar: %v", err)
 			log.Println("continuing despite WatchJar failure", err)
 		}
-		g.Client.Jar = &wrapJar{jar}
+		g.Client.Jar = jar
 	}
 	g.UserAgent = *agent
 
@@ -168,11 +166,20 @@ func main() {
 		os.Exit(0)
 	}
 
-	if *register {
+	if *register || *update {
 		if *repo == "" {
 			log.Fatalf("need to set --repo")
 		}
-		ch, err := CreateChecker(g, *repo)
+
+		if *language == "" {
+			log.Fatalf("must set --language.")
+		}
+
+		if !gerritfmt.IsSupported(*language) {
+			log.Fatalf("language is not supported. Choices are %s", gerritfmt.SupportedLanguages())
+		}
+
+		ch, err := PostChecker(g, *repo, *language, *update)
 		if err != nil {
 			log.Fatalf("CreateChecker: %v", err)
 		}

@@ -15,9 +15,11 @@
 package gerritfmt
 
 type File struct {
-	Name    string
-	Content []byte
+	Language string
+	Name     string
+	Content  []byte
 }
+
 type FormatRequest struct {
 	Files []File
 }
