@@ -16,6 +16,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha1"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -38,6 +40,73 @@ type gerritChecker struct {
 	todo chan *gerrit.PendingChecksInfo
 }
 
+const checkerScheme = "fmt:"
+
+// ListCheckers returns all the checkers that conform to our scheme.
+func (gc *gerritChecker) ListCheckers() ([]*gerrit.CheckerInfo, error) {
+	c, err := gc.server.GetPath("a/plugins/checks/checkers/")
+	if err != nil {
+		log.Fatalf("ListCheckers: %v", err)
+	}
+
+	var out []*gerrit.CheckerInfo
+	if err := gerrit.Unmarshal(c, &out); err != nil {
+		return nil, err
+	}
+
+	filtered := out[:0]
+	for _, o := range out {
+		if !strings.HasPrefix(o.UUID, checkerScheme) {
+			continue
+		}
+		if _, ok := checkerLanguage(o.UUID); !ok {
+			continue
+		}
+
+		filtered = append(filtered, o)
+	}
+	return filtered, nil
+}
+
+// PostChecker modifies a checker.
+func (gc *gerritChecker) PostChecker(repo, language string, create bool) (*gerrit.CheckerInfo, error) {
+	hash := sha1.New()
+	hash.Write([]byte(repo))
+
+	uuid := fmt.Sprintf("%s%s-%x", checkerScheme, language, hash.Sum(nil))
+	in := gerrit.CheckerInput{
+		UUID:        uuid,
+		Name:        language + " formatting",
+		Repository:  repo,
+		Description: "check source code formatting.",
+		Status:      "ENABLED",
+		Query:       gerritfmt.Formatters[language].Query,
+	}
+
+	body, err := json.Marshal(&in)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Println(string(body))
+
+	path := "a/plugins/checks/checkers/"
+	if !create {
+		path += uuid
+	}
+	content, err := gc.server.PostPath(path, "application/json", body)
+	if err != nil {
+		return nil, err
+	}
+
+	out := gerrit.CheckerInfo{}
+	if err := gerrit.Unmarshal(content, &out); err != nil {
+		return nil, err
+	}
+
+	return &out, nil
+}
+
 func checkerLanguage(uuid string) (string, bool) {
 	uuid = strings.TrimPrefix(uuid, checkerScheme)
 	fields := strings.Split(uuid, "-")
@@ -53,7 +122,7 @@ func NewGerritChecker(server *gerrit.Server) (*gerritChecker, error) {
 		todo:   make(chan *gerrit.PendingChecksInfo, 5),
 	}
 
-	if out, err := ListCheckers(server); err != nil {
+	if out, err := gc.ListCheckers(); err != nil {
 		return nil, err
 	} else {
 		for _, checker := range out {

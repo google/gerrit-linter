@@ -16,87 +16,18 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha1"
 	"encoding/base64"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net/url"
 	"os"
-	"strings"
 
 	"github.com/google/gerritfmt"
 	"github.com/google/gerritfmt/gerrit"
 	"github.com/google/slothfs/cookie"
 )
-
-const checkerScheme = "fmt:"
-
-func PostChecker(s *gerrit.Server, repo, language string, create bool) (*gerrit.CheckerInfo, error) {
-	hash := sha1.New()
-	hash.Write([]byte(repo))
-
-	uuid := fmt.Sprintf("%s%s-%x", checkerScheme, language, hash.Sum(nil))
-	in := gerrit.CheckerInput{
-		UUID:        uuid,
-		Name:        language + " formatting",
-		Repository:  repo,
-		Description: "check source code formatting.",
-		Status:      "ENABLED",
-		Query:       gerritfmt.Formatters[language].Query,
-	}
-
-	body, err := json.Marshal(&in)
-	if err != nil {
-		return nil, err
-	}
-
-	log.Println(string(body))
-
-	path := "a/plugins/checks/checkers/"
-	if !create {
-		path += uuid
-	}
-	content, err := s.PostPath(path, "application/json", body)
-	if err != nil {
-		return nil, err
-	}
-
-	out := gerrit.CheckerInfo{}
-	if err := gerrit.Unmarshal(content, &out); err != nil {
-		return nil, err
-	}
-
-	return &out, nil
-}
-
-// ListCheckers returns all the checkers that conform to our scheme.
-func ListCheckers(g *gerrit.Server) ([]*gerrit.CheckerInfo, error) {
-	c, err := g.GetPath("a/plugins/checks/checkers/")
-	if err != nil {
-		log.Fatalf("ListCheckers: %v", err)
-	}
-
-	var out []*gerrit.CheckerInfo
-	if err := gerrit.Unmarshal(c, &out); err != nil {
-		return nil, err
-	}
-
-	filtered := out[:0]
-	for _, o := range out {
-		if !strings.HasPrefix(o.UUID, checkerScheme) {
-			continue
-		}
-		if _, ok := checkerLanguage(o.UUID); !ok {
-			continue
-		}
-
-		filtered = append(filtered, o)
-	}
-	return filtered, nil
-}
 
 func main() {
 	gerritURL := flag.String("gerrit", "", "URL to gerrit host")
@@ -150,8 +81,13 @@ func main() {
 		log.Fatalf("accounts/self: %v", err)
 	}
 
+	gc, err := NewGerritChecker(g)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	if *list {
-		if out, err := ListCheckers(g); err != nil {
+		if out, err := gc.ListCheckers(); err != nil {
 			log.Fatalf("List: %v", err)
 		} else {
 			for _, ch := range out {
@@ -177,17 +113,12 @@ func main() {
 			log.Fatalf("language is not supported. Choices are %s", gerritfmt.SupportedLanguages())
 		}
 
-		ch, err := PostChecker(g, *repo, *language, *update)
+		ch, err := gc.PostChecker(*repo, *language, *update)
 		if err != nil {
 			log.Fatalf("CreateChecker: %v", err)
 		}
 		log.Printf("CreateChecker result: %v", ch)
 		os.Exit(0)
-	}
-
-	gc, err := NewGerritChecker(g)
-	if err != nil {
-		log.Fatal(err)
 	}
 
 	gc.Serve()
