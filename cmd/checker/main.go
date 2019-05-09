@@ -23,6 +23,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"path/filepath"
 
 	"github.com/google/gerritfmt"
 	"github.com/google/gerritfmt/gerrit"
@@ -42,6 +43,11 @@ func main() {
 	flag.Parse()
 	if *gerritURL == "" {
 		log.Fatal("must set --gerrit")
+	}
+
+	// Add path to self to $PATH, for easy deployment.
+	if exe, err := os.Executable(); err == nil {
+		os.Setenv("PATH", filepath.Dir(exe)+":"+os.Getenv("PATH"))
 	}
 
 	u, err := url.Parse(*gerritURL)
