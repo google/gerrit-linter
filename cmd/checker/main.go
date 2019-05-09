@@ -55,6 +55,10 @@ func main() {
 		log.Fatalf("url.Parse: %v", err)
 	}
 
+	if *authFile == "" && *cookieJar == "" {
+		log.Fatal("must set --auth_file or --cookies")
+	}
+
 	g := gerrit.New(*u)
 
 	if nm := *cookieJar; nm != "" {
@@ -70,16 +74,15 @@ func main() {
 	}
 	g.UserAgent = *agent
 
-	if *authFile == "" {
-		log.Fatal("must set --auth_file")
-	}
-	if content, err := ioutil.ReadFile(*authFile); err != nil {
-		log.Fatal(err)
-	} else {
-		auth := bytes.TrimSpace(content)
-		encoded := make([]byte, base64.StdEncoding.EncodedLen(len(auth)))
-		base64.StdEncoding.Encode(encoded, auth)
-		g.BasicAuth = string(encoded)
+	if *authFile != "" {
+		if content, err := ioutil.ReadFile(*authFile); err != nil {
+			log.Fatal(err)
+		} else {
+			auth := bytes.TrimSpace(content)
+			encoded := make([]byte, base64.StdEncoding.EncodedLen(len(auth)))
+			base64.StdEncoding.Encode(encoded, auth)
+			g.BasicAuth = string(encoded)
+		}
 	}
 
 	// Do a GET first to complete any cookie dance, because POST aren't redirected properly.

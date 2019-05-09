@@ -66,7 +66,9 @@ func (g *Server) GetPath(p string) ([]byte, error) {
 
 func (g *Server) Do(req *http.Request) (*http.Response, error) {
 	req.Header.Set("User-Agent", g.UserAgent)
-	req.Header.Set("Authorization", "Basic "+string(g.BasicAuth))
+	if g.BasicAuth != "" {
+		req.Header.Set("Authorization", "Basic "+string(g.BasicAuth))
+	}
 
 	if g.Debug {
 		if req.URL.RawQuery != "" {
