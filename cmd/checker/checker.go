@@ -69,7 +69,7 @@ func (gc *gerritChecker) ListCheckers() ([]*gerrit.CheckerInfo, error) {
 }
 
 // PostChecker modifies a checker.
-func (gc *gerritChecker) PostChecker(repo, language string, create bool) (*gerrit.CheckerInfo, error) {
+func (gc *gerritChecker) PostChecker(repo, language string, update bool) (*gerrit.CheckerInfo, error) {
 	hash := sha1.New()
 	hash.Write([]byte(repo))
 
@@ -88,10 +88,8 @@ func (gc *gerritChecker) PostChecker(repo, language string, create bool) (*gerri
 		return nil, err
 	}
 
-	log.Println(string(body))
-
 	path := "a/plugins/checks/checkers/"
-	if !create {
+	if update {
 		path += uuid
 	}
 	content, err := gc.server.PostPath(path, "application/json", body)

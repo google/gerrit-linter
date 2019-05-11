@@ -21,14 +21,74 @@ import (
 	"flag"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/google/gerritfmt"
 	"github.com/google/gerritfmt/gerrit"
 	"github.com/google/slothfs/cookie"
 )
+
+type hardcodedJar struct {
+	mu      sync.Mutex
+	cookies []*http.Cookie
+}
+
+func NewHardcodedJar(nm string) (*hardcodedJar, error) {
+	j := &hardcodedJar{}
+	if err := j.read(nm); err != nil {
+		return nil, err
+	}
+	go func() {
+		// TODO: use inotify
+		for range time.Tick(time.Minute) {
+			if err := j.read(nm); err != nil {
+				log.Println("read %s: %v", nm, err)
+			}
+		}
+	}()
+	return j, nil
+}
+
+func (j *hardcodedJar) read(nm string) error {
+	f, err := os.Open(nm)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	cs, err := cookie.ParseCookieJar(f)
+	if err != nil {
+		return err
+	}
+
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.cookies = cs
+	return nil
+}
+
+func (j *hardcodedJar) Cookies(u *url.URL) []*http.Cookie {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
+	var r []*http.Cookie
+	for _, c := range j.cookies {
+		if strings.HasSuffix(u.Host, c.Domain) {
+			r = append(r, c)
+		}
+	}
+	return r
+}
+
+func (w *hardcodedJar) SetCookies(u *url.URL, cs []*http.Cookie) {
+	log.Println("SetCookies", u, cs)
+}
 
 func main() {
 	gerritURL := flag.String("gerrit", "", "URL to gerrit host")
@@ -62,15 +122,10 @@ func main() {
 	g := gerrit.New(*u)
 
 	if nm := *cookieJar; nm != "" {
-		jar, err := cookie.NewJar(nm)
+		g.Client.Jar, err = NewHardcodedJar(nm)
 		if err != nil {
-			log.Fatalf("NewJar(%s): %v", nm, err)
+			log.Fatal("NewHardcodedJar: %v", err)
 		}
-		if err := cookie.WatchJar(jar, nm); err != nil {
-			log.Printf("WatchJar: %v", err)
-			log.Println("continuing despite WatchJar failure", err)
-		}
-		g.Client.Jar = jar
 	}
 	g.UserAgent = *agent
 
