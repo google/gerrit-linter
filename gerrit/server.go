@@ -44,14 +44,10 @@ func New(u url.URL) *Server {
 	}
 
 	g.Client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		g.setRequest(req)
 		return nil
 	}
 
 	return g
-}
-
-func (g *Server) setRequest(req *http.Request) {
 }
 
 func (g *Server) GetPath(p string) ([]byte, error) {
@@ -108,7 +104,6 @@ func (g *Server) PostPath(p string, contentType string, content []byte) ([]byte,
 	if err != nil {
 		return nil, err
 	}
-	g.setRequest(req)
 	req.Header.Set("Content-Type", contentType)
 	rep, err := g.Do(req)
 	if err != nil {
