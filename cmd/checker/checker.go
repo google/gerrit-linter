@@ -143,7 +143,7 @@ func (c *gerritChecker) checkChange(changeID string, psID int, language string) 
 	for n, f := range ch.Files {
 		cfg := gerritfmt.Formatters[language]
 		if cfg == nil {
-			return nil, fmt.Errorf("language %q not configured")
+			return nil, fmt.Errorf("language %q not configured", language)
 		}
 		if !cfg.Regex.MatchString(n) {
 			continue

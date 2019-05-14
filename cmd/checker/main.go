@@ -47,7 +47,7 @@ func NewHardcodedJar(nm string) (*hardcodedJar, error) {
 		// TODO: use inotify
 		for range time.Tick(time.Minute) {
 			if err := j.read(nm); err != nil {
-				log.Println("read %s: %v", nm, err)
+				log.Printf("read %s: %v", nm, err)
 			}
 		}
 	}()
@@ -118,7 +118,7 @@ func main() {
 	if nm := *cookieJar; nm != "" {
 		g.Client.Jar, err = NewHardcodedJar(nm)
 		if err != nil {
-			log.Fatal("NewHardcodedJar: %v", err)
+			log.Fatalf("NewHardcodedJar: %v", err)
 		}
 	}
 	g.UserAgent = *agent
