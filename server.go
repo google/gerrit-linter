@@ -56,6 +56,11 @@ var Formatters = map[string]*FormatterConfig{
 }
 
 func init() {
+	// Add path to self to $PATH, for easy deployment.
+	if exe, err := os.Executable(); err == nil {
+		os.Setenv("PATH", filepath.Dir(exe)+":"+os.Getenv("PATH"))
+	}
+
 	gjf, err := exec.LookPath("google-java-format")
 	if err == nil {
 		Formatters["java"] = &FormatterConfig{
@@ -67,7 +72,7 @@ func init() {
 			},
 		}
 	} else {
-		log.Printf("LookPath google-java-format: %v", err, os.Getenv("PATH"))
+		log.Printf("LookPath google-java-format: %v PATH=%s", err, os.Getenv("PATH"))
 	}
 
 	bzl, err := exec.LookPath("buildifier")
@@ -81,7 +86,7 @@ func init() {
 			},
 		}
 	} else {
-		log.Printf("LookPath buildifier: %v, %s", err, os.Getenv("PATH"))
+		log.Printf("LookPath buildifier: %v, PATH=%s", err, os.Getenv("PATH"))
 	}
 
 	gofmt, err := exec.LookPath("gofmt")
@@ -95,7 +100,7 @@ func init() {
 			},
 		}
 	} else {
-		log.Printf("LookPath gofmt: %v, %s", err, os.Getenv("PATH"))
+		log.Printf("LookPath gofmt: %v, PATH=%s", err, os.Getenv("PATH"))
 	}
 }
 
