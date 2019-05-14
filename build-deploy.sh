@@ -18,6 +18,7 @@ if [[ ! -f  google-java-format.jar ]] ; then
 fi
 
 cp google-java-format.jar ${dest}/
+chmod +x ${dest}/*.jar
 
 go build -o ${dest}/buildifier github.com/bazelbuild/buildtools/buildifier
 
