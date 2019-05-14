@@ -66,6 +66,8 @@ func init() {
 				args: []string{"-jar", gjf, "-i"},
 			},
 		}
+	} else {
+		log.Printf("LookPath google-java-format: %v", err, os.Getenv("PATH"))
 	}
 
 	bzl, err := exec.LookPath("buildifier")
@@ -78,6 +80,8 @@ func init() {
 				args: []string{"-mode=fix"},
 			},
 		}
+	} else {
+		log.Printf("LookPath buildifier: %v, %s", err, os.Getenv("PATH"))
 	}
 
 	gofmt, err := exec.LookPath("gofmt")
@@ -90,6 +94,8 @@ func init() {
 				args: []string{"-w"},
 			},
 		}
+	} else {
+		log.Printf("LookPath gofmt: %v, %s", err, os.Getenv("PATH"))
 	}
 }
 
