@@ -26,8 +26,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/gerritfmt"
-	"github.com/google/gerritfmt/gerrit"
+	linter "github.com/google/gerrit-linter"
+	"github.com/google/gerrit-linter/gerrit"
 )
 
 // gerritChecker run formatting checks against a gerrit server.
@@ -80,7 +80,7 @@ func (gc *gerritChecker) PostChecker(repo, language string, update bool) (*gerri
 		Repository:  repo,
 		Description: "check source code formatting.",
 		Status:      "ENABLED",
-		Query:       gerritfmt.Formatters[language].Query,
+		Query:       linter.Formatters[language].Query,
 	}
 
 	body, err := json.Marshal(&in)
@@ -139,9 +139,9 @@ func (c *gerritChecker) checkChange(changeID string, psID int, language string) 
 	if err != nil {
 		return nil, err
 	}
-	req := gerritfmt.FormatRequest{}
+	req := linter.FormatRequest{}
 	for n, f := range ch.Files {
-		cfg := gerritfmt.Formatters[language]
+		cfg := linter.Formatters[language]
 		if cfg == nil {
 			return nil, fmt.Errorf("language %q not configured", language)
 		}
@@ -150,7 +150,7 @@ func (c *gerritChecker) checkChange(changeID string, psID int, language string) 
 		}
 
 		req.Files = append(req.Files,
-			gerritfmt.File{
+			linter.File{
 				Language: language,
 				Name:     n,
 				Content:  f.Content,
@@ -160,8 +160,8 @@ func (c *gerritChecker) checkChange(changeID string, psID int, language string) 
 		return nil, errIrrelevant
 	}
 
-	rep := gerritfmt.FormatReply{}
-	if err := gerritfmt.Format(&req, &rep); err != nil {
+	rep := linter.FormatReply{}
+	if err := linter.Format(&req, &rep); err != nil {
 		_, ok := err.(rpc.ServerError)
 		if ok {
 			return nil, fmt.Errorf("server returned: %s", err)

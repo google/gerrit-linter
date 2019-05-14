@@ -28,8 +28,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/gerritfmt"
-	"github.com/google/gerritfmt/gerrit"
+	linter "github.com/google/gerrit-linter"
+	"github.com/google/gerrit-linter/gerrit"
 	"github.com/google/slothfs/cookie"
 )
 
@@ -167,8 +167,8 @@ func main() {
 			log.Fatalf("must set --language.")
 		}
 
-		if !gerritfmt.IsSupported(*language) {
-			log.Fatalf("language is not supported. Choices are %s", gerritfmt.SupportedLanguages())
+		if !linter.IsSupported(*language) {
+			log.Fatalf("language is not supported. Choices are %s", linter.SupportedLanguages())
 		}
 
 		ch, err := gc.PostChecker(*repo, *language, *update)

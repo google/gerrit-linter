@@ -1,4 +1,4 @@
-module github.com/google/gerritfmt
+module github.com/google/gerrit-linter
 
 require (
 	github.com/bazelbuild/buildtools v0.0.0-20190405103555-895625218c56 // indirect
