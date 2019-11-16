@@ -274,6 +274,7 @@ func (gc *gerritChecker) executeCheck(pc *gerrit.PendingChecksInfo) error {
 				status = statusIrrelevant
 			} else if err != nil {
 				status = statusFail
+				log.Printf("checkChange(%s, %d, %q): %v", changeID, psID, lang)
 				msgs = []string{fmt.Sprintf("tool failure: %v", err)}
 			} else if len(msgs) == 0 {
 				status = statusSuccessful
@@ -281,8 +282,8 @@ func (gc *gerritChecker) executeCheck(pc *gerrit.PendingChecksInfo) error {
 				status = statusFail
 			}
 			msg = strings.Join(msgs, ", ")
-			if len(msg) > 80 {
-				msg = msg[:77] + "..."
+			if len(msg) > 1000 {
+				msg = msg[:995] + "..."
 			}
 		}
 
