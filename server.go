@@ -61,7 +61,7 @@ func init() {
 		os.Setenv("PATH", filepath.Dir(exe)+":"+os.Getenv("PATH"))
 	}
 
-	gjf, err := exec.LookPath("google-java-format")
+	gjf, err := exec.LookPath("google-java-format.jar")
 	if err == nil {
 		Formatters["java"] = &FormatterConfig{
 			Regex: regexp.MustCompile(`\.java$`),
