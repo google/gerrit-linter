@@ -37,9 +37,10 @@ type gerritChecker struct {
 	todo chan *gerrit.PendingChecksInfo
 }
 
+// checkerScheme is the scheme by which we are registered in the Gerrit server.
 const checkerScheme = "fmt"
 
-// ListCheckers returns all the checkers that conform to our scheme.
+// ListCheckers returns all the checkers for our scheme.
 func (gc *gerritChecker) ListCheckers() ([]*gerrit.CheckerInfo, error) {
 	c, err := gc.server.GetPath("a/plugins/checks/checkers/")
 	if err != nil {
@@ -65,7 +66,8 @@ func (gc *gerritChecker) ListCheckers() ([]*gerrit.CheckerInfo, error) {
 	return filtered, nil
 }
 
-// PostChecker modifies a checker.
+// PostChecker creates or changes a checker. It sets up a checker on
+// the given repo, for the given language.
 func (gc *gerritChecker) PostChecker(repo, language string, update bool) (*gerrit.CheckerInfo, error) {
 	hash := sha1.New()
 	hash.Write([]byte(repo))
@@ -102,6 +104,7 @@ func (gc *gerritChecker) PostChecker(repo, language string, update bool) (*gerri
 	return &out, nil
 }
 
+// checkerLanguage extracts the language to check for from a checker UUID.
 func checkerLanguage(uuid string) (string, bool) {
 	uuid = strings.TrimPrefix(uuid, checkerScheme+":")
 	fields := strings.Split(uuid, "-")
@@ -111,6 +114,8 @@ func checkerLanguage(uuid string) (string, bool) {
 	return fields[0], true
 }
 
+// NewGerritChecker creates a server that periodically checks a gerrit
+// server for pending checks.
 func NewGerritChecker(server *gerrit.Server) (*gerritChecker, error) {
 	gc := &gerritChecker{
 		server: server,
@@ -121,8 +126,11 @@ func NewGerritChecker(server *gerrit.Server) (*gerritChecker, error) {
 	return gc, nil
 }
 
+// errIrrelevant is a marker error value used for checks that don't apply for a change.
 var errIrrelevant = errors.New("irrelevant")
 
+// checkChange checks a (change, patchset) for correct formatting in the given language. It returns
+// a list of complaints, or the errIrrelevant error if there is nothing to do.
 func (c *gerritChecker) checkChange(changeID string, psID int, language string) ([]string, error) {
 	ch, err := c.server.GetChange(changeID, strconv.Itoa(psID))
 	if err != nil {
@@ -179,6 +187,8 @@ func (c *gerritChecker) checkChange(changeID string, psID int, language string) 
 	return msgs, nil
 }
 
+// pendingLoop periodically contacts gerrit to find new checks to
+// execute. It should be executed in a goroutine.
 func (c *gerritChecker) pendingLoop() {
 	for {
 		pending, err := c.server.PendingChecksByScheme(checkerScheme)
@@ -202,6 +212,8 @@ func (c *gerritChecker) pendingLoop() {
 	}
 }
 
+// Serve runs the serve loop, executing formatters for checks that
+// need it.
 func (gc *gerritChecker) Serve() {
 	for p := range gc.todo {
 		// TODO: parallelism?.
@@ -211,6 +223,7 @@ func (gc *gerritChecker) Serve() {
 	}
 }
 
+// status encodes the checker states.
 type status int
 
 var (
@@ -231,6 +244,7 @@ func (s status) String() string {
 	}[s]
 }
 
+// executeCheck executes the pending checks specified in the argument.
 func (gc *gerritChecker) executeCheck(pc *gerrit.PendingChecksInfo) error {
 	log.Println("checking", pc)
 

@@ -26,6 +26,7 @@ import (
 	"strings"
 )
 
+// Server represents a single Gerrit host.
 type Server struct {
 	UserAgent string
 	URL       url.URL
@@ -38,6 +39,7 @@ type Server struct {
 	BasicAuth string
 }
 
+// New creates a Gerrit Server for the given URL.
 func New(u url.URL) *Server {
 	g := &Server{
 		URL: u,
@@ -50,6 +52,7 @@ func New(u url.URL) *Server {
 	return g
 }
 
+// GetPath runs a Get on the given path.
 func (g *Server) GetPath(p string) ([]byte, error) {
 	u := g.URL
 	u.Path = path.Join(u.Path, p)
@@ -60,6 +63,7 @@ func (g *Server) GetPath(p string) ([]byte, error) {
 	return g.Get(&u)
 }
 
+// Do runs a HTTP request against the remote server.
 func (g *Server) Do(req *http.Request) (*http.Response, error) {
 	req.Header.Set("User-Agent", g.UserAgent)
 	if g.BasicAuth != "" {
@@ -76,6 +80,7 @@ func (g *Server) Do(req *http.Request) (*http.Response, error) {
 	return g.Client.Do(req)
 }
 
+// Get runs a HTTP GET request on the given URL.
 func (g *Server) Get(u *url.URL) ([]byte, error) {
 	req, err := http.NewRequest("GET", u.String(), nil)
 	if err != nil {
@@ -93,6 +98,7 @@ func (g *Server) Get(u *url.URL) ([]byte, error) {
 	return ioutil.ReadAll(rep.Body)
 }
 
+// PostPath posts the given data onto a path.
 func (g *Server) PostPath(p string, contentType string, content []byte) ([]byte, error) {
 	u := g.URL
 	u.Path = path.Join(u.Path, p)
@@ -186,6 +192,7 @@ func (s *Server) PendingChecksByScheme(scheme string) ([]*PendingChecksInfo, err
 	return out, nil
 }
 
+// PendingChecks returns the checks pending for the given checker.
 func (s *Server) PendingChecks(checkerUUID string) ([]*PendingChecksInfo, error) {
 	u := s.URL
 
@@ -208,6 +215,7 @@ func (s *Server) PendingChecks(checkerUUID string) ([]*PendingChecksInfo, error)
 	return out, nil
 }
 
+// PostCheck posts a single check result onto a change.
 func (s *Server) PostCheck(changeID string, psID int, input *CheckInput) (*CheckInfo, error) {
 	body, err := json.Marshal(input)
 	if err != nil {
