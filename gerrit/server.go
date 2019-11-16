@@ -165,6 +165,27 @@ func (g *Server) GetChange(changeID string, revID string) (*Change, error) {
 	return &Change{files}, nil
 }
 
+func (s *Server) PendingChecksByScheme(scheme string) ([]*PendingChecksInfo, error) {
+	u := s.URL
+
+	// The trailing '/' handling is really annoying.
+	u.Path = path.Join(u.Path, "a/plugins/checks/checks.pending/") + "/"
+
+	q := "scheme:" + scheme
+	u.RawQuery = "query=" + q
+	content, err := s.Get(&u)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []*PendingChecksInfo
+	if err := Unmarshal(content, &out); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
 func (s *Server) PendingChecks(checkerUUID string) ([]*PendingChecksInfo, error) {
 	u := s.URL
 
