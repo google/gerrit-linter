@@ -151,7 +151,10 @@ func (g *Server) GetChange(changeID string, revID string) (*Change, error) {
 		return nil, err
 	}
 
-	for name := range files {
+	for name, file := range files {
+		if file.Status == "D" {
+			continue
+		}
 		c, err := g.GetContent(changeID, revID, name)
 		if err != nil {
 			return nil, err
