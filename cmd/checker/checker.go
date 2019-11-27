@@ -34,13 +34,10 @@ import (
 type gerritChecker struct {
 	server *gerrit.Server
 
-	// UUID => language
-	checkerUUIDs []string
-
 	todo chan *gerrit.PendingChecksInfo
 }
 
-const checkerScheme = "fmt:"
+const checkerScheme = "fmt"
 
 // ListCheckers returns all the checkers that conform to our scheme.
 func (gc *gerritChecker) ListCheckers() ([]*gerrit.CheckerInfo, error) {
@@ -56,7 +53,7 @@ func (gc *gerritChecker) ListCheckers() ([]*gerrit.CheckerInfo, error) {
 
 	filtered := out[:0]
 	for _, o := range out {
-		if !strings.HasPrefix(o.UUID, checkerScheme) {
+		if !strings.HasPrefix(o.UUID, checkerScheme+":") {
 			continue
 		}
 		if _, ok := checkerLanguage(o.UUID); !ok {
@@ -73,7 +70,7 @@ func (gc *gerritChecker) PostChecker(repo, language string, update bool) (*gerri
 	hash := sha1.New()
 	hash.Write([]byte(repo))
 
-	uuid := fmt.Sprintf("%s%s-%x", checkerScheme, language, hash.Sum(nil))
+	uuid := fmt.Sprintf("%s:%s-%x", checkerScheme, language, hash.Sum(nil))
 	in := gerrit.CheckerInput{
 		UUID:        uuid,
 		Name:        language + " formatting",
@@ -106,7 +103,7 @@ func (gc *gerritChecker) PostChecker(repo, language string, update bool) (*gerri
 }
 
 func checkerLanguage(uuid string) (string, bool) {
-	uuid = strings.TrimPrefix(uuid, checkerScheme)
+	uuid = strings.TrimPrefix(uuid, checkerScheme+":")
 	fields := strings.Split(uuid, "-")
 	if len(fields) != 2 {
 		return "", false
@@ -118,14 +115,6 @@ func NewGerritChecker(server *gerrit.Server) (*gerritChecker, error) {
 	gc := &gerritChecker{
 		server: server,
 		todo:   make(chan *gerrit.PendingChecksInfo, 5),
-	}
-
-	if out, err := gc.ListCheckers(); err != nil {
-		return nil, err
-	} else {
-		for _, checker := range out {
-			gc.checkerUUIDs = append(gc.checkerUUIDs, checker.UUID)
-		}
 	}
 
 	go gc.pendingLoop()
@@ -192,22 +181,20 @@ func (c *gerritChecker) checkChange(changeID string, psID int, language string) 
 
 func (c *gerritChecker) pendingLoop() {
 	for {
-		for _, uuid := range c.checkerUUIDs {
-			pending, err := c.server.PendingChecks(uuid)
-			if err != nil {
-				log.Printf("PendingChecks: %v", err)
-				continue
-			}
-			if len(pending) == 0 {
-				log.Printf("no pending checks")
-			}
+		pending, err := c.server.PendingChecksByScheme(checkerScheme)
+		if err != nil {
+			log.Printf("PendingChecksByScheme: %v", err)
+			continue
+		}
+		if len(pending) == 0 {
+			log.Printf("no pending checks")
+		}
 
-			for _, pc := range pending {
-				select {
-				case c.todo <- pc:
-				default:
-					log.Println("too busy; dropping pending check.")
-				}
+		for _, pc := range pending {
+			select {
+			case c.todo <- pc:
+			default:
+				log.Println("too busy; dropping pending check.")
 			}
 		}
 		// TODO: real rate limiting.
@@ -274,7 +261,7 @@ func (gc *gerritChecker) executeCheck(pc *gerrit.PendingChecksInfo) error {
 				status = statusIrrelevant
 			} else if err != nil {
 				status = statusFail
-				log.Printf("checkChange(%s, %d, %q): %v", changeID, psID, lang)
+				log.Printf("checkChange(%s, %d, %q): %v", changeID, psID, lang, err)
 				msgs = []string{fmt.Sprintf("tool failure: %v", err)}
 			} else if len(msgs) == 0 {
 				status = statusSuccessful
