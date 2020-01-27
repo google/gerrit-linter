@@ -40,8 +40,8 @@ go run ./cmd/checker -auth_file=testsite-auth  --gerrit http://localhost:8080
 
 ## DESIGN
 
-For simplicity of deployment, gerritfmt checker is stateless. All the necessary
-data is encoded in the checker UUID
+For simplicity of deployment, the gerrit-linter checker is stateless. All the
+necessary data is encoded in the checker UUID.
 
 
 ## TODO

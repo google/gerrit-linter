@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/gerritfmt/gerrit"
+	"github.com/google/gerrit-linter/gerrit"
 )
 
 // The token as it comes from metadata service.

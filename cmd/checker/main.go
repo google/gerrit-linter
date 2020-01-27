@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 
+	linter "github.com/google/gerrit-linter"
 	"github.com/google/gerrit-linter/gerrit"
 )
 
