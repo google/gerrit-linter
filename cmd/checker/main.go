@@ -15,79 +15,15 @@
 package main
 
 import (
-	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"io/ioutil"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
-	"strings"
-	"sync"
-	"time"
 
-	linter "github.com/google/gerrit-linter"
 	"github.com/google/gerrit-linter/gerrit"
-	"github.com/google/slothfs/cookie"
 )
-
-type hardcodedJar struct {
-	mu      sync.Mutex
-	cookies []*http.Cookie
-}
-
-func NewHardcodedJar(nm string) (*hardcodedJar, error) {
-	j := &hardcodedJar{}
-	if err := j.read(nm); err != nil {
-		return nil, err
-	}
-	go func() {
-		// TODO: use inotify
-		for range time.Tick(time.Minute) {
-			if err := j.read(nm); err != nil {
-				log.Printf("read %s: %v", nm, err)
-			}
-		}
-	}()
-	return j, nil
-}
-
-func (j *hardcodedJar) read(nm string) error {
-	f, err := os.Open(nm)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	cs, err := cookie.ParseCookieJar(f)
-	if err != nil {
-		return err
-	}
-
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	j.cookies = cs
-	return nil
-}
-
-func (j *hardcodedJar) Cookies(u *url.URL) []*http.Cookie {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-
-	var r []*http.Cookie
-	for _, c := range j.cookies {
-		if strings.HasSuffix(u.Host, c.Domain) {
-			r = append(r, c)
-		}
-	}
-	return r
-}
-
-func (w *hardcodedJar) SetCookies(u *url.URL, cs []*http.Cookie) {
-	log.Println("SetCookies", u, cs)
-}
 
 func main() {
 	gerritURL := flag.String("gerrit", "", "URL to gerrit host")
@@ -95,7 +31,7 @@ func main() {
 	update := flag.Bool("update", false, "Update an existing checker on the host")
 	list := flag.Bool("list", false, "List pending checks")
 	agent := flag.String("agent", "fmtserver", "user-agent for the fmtserver.")
-	cookieJar := flag.String("cookies", "", "comma separated paths to cURL-style cookie jar file.")
+	gcpServiceAccount := flag.String("gcp_service_account", "", "A GCP service account ID to run this as")
 	authFile := flag.String("auth_file", "", "file containing user:password")
 	repo := flag.String("repo", "", "the repository (project) name to apply the checker to.")
 	language := flag.String("language", "", "the language that the checker should apply to.")
@@ -109,32 +45,31 @@ func main() {
 		log.Fatalf("url.Parse: %v", err)
 	}
 
-	if *authFile == "" && *cookieJar == "" {
-		log.Fatal("must set --auth_file or --cookies")
+	if (*authFile == "" && *gcpServiceAccount == "") || (*authFile != "" && *gcpServiceAccount != "") {
+		log.Fatal("must set one of --auth_file or --gcp_service_account")
 	}
 
 	g := gerrit.New(*u)
 
-	if nm := *cookieJar; nm != "" {
-		g.Client.Jar, err = NewHardcodedJar(nm)
-		if err != nil {
-			log.Fatalf("NewHardcodedJar: %v", err)
-		}
-	}
 	g.UserAgent = *agent
 
 	if *authFile != "" {
-		if content, err := ioutil.ReadFile(*authFile); err != nil {
+		content, err := ioutil.ReadFile(*authFile)
+		if err != nil {
 			log.Fatal(err)
-		} else {
-			auth := bytes.TrimSpace(content)
-			encoded := make([]byte, base64.StdEncoding.EncodedLen(len(auth)))
-			base64.StdEncoding.Encode(encoded, auth)
-			g.BasicAuth = string(encoded)
+		}
+		g.Authenticator = gerrit.NewBasicAuth(string(content))
+	}
+	if *gcpServiceAccount != "" {
+		g.Authenticator, err := NewGCPServiceAccount(*gcpServiceAccount)
+		if err != nil {
+			log.Fatal(err)
 		}
 	}
 
-	// Do a GET first to complete any cookie dance, because POST aren't redirected properly.
+	// Do a GET first to complete any cookie dance, because POST
+	// aren't redirected properly. Also, this avoids spamming logs with
+	// failure messages.
 	if _, err := g.GetPath("a/accounts/self"); err != nil {
 		log.Fatalf("accounts/self: %v", err)
 	}

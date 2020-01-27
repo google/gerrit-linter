@@ -35,8 +35,34 @@ type Server struct {
 	// Issue trace requests.
 	Debug bool
 
+	Authenticator Authenticator
+}
+
+type Authenticator interface {
+	// Authenticate adds an authentication header to an outgoing request.
+	Authenticate(req *http.Request) error
+}
+
+// BasicAuth adds the "Basic Authorization" header to an outgoing request.
+type BasicAuth struct {
 	// Base64 encoded user:secret string.
-	BasicAuth string
+	EncodedBasicAuth string
+}
+
+// NewBasicAuth creates a BasicAuth authenticator. |who| should be a
+// "user:secret" string.
+func NewBasicAuth(who string) *BasicAuth {
+	auth := strings.TrimSpace(who)
+	encoded := make([]byte, base64.StdEncoding.EncodedLen(len(auth)))
+	base64.StdEncoding.Encode(encoded, []byte(auth))
+	return &BasicAuth{
+		EncodedBasicAuth: string(encoded),
+	}
+}
+
+func (b *BasicAuth) Authenticate(req *http.Request) error {
+	req.Header.Set("Authorization", "Basic "+string(b.EncodedBasicAuth))
+	return nil
 }
 
 // New creates a Gerrit Server for the given URL.
@@ -66,8 +92,10 @@ func (g *Server) GetPath(p string) ([]byte, error) {
 // Do runs a HTTP request against the remote server.
 func (g *Server) Do(req *http.Request) (*http.Response, error) {
 	req.Header.Set("User-Agent", g.UserAgent)
-	if g.BasicAuth != "" {
-		req.Header.Set("Authorization", "Basic "+string(g.BasicAuth))
+	if g.Authenticator != nil {
+		if err := g.Authenticator.Authenticate(req); err != nil {
+			return nil, err
+		}
 	}
 
 	if g.Debug {
