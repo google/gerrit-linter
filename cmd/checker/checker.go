@@ -191,11 +191,15 @@ func (c *gerritChecker) checkChange(changeID string, psID int, language string) 
 // execute. It should be executed in a goroutine.
 func (c *gerritChecker) pendingLoop() {
 	for {
+		// TODO: real rate limiting.
+		time.Sleep(10 * time.Second)
+
 		pending, err := c.server.PendingChecksByScheme(checkerScheme)
 		if err != nil {
 			log.Printf("PendingChecksByScheme: %v", err)
 			continue
 		}
+
 		if len(pending) == 0 {
 			log.Printf("no pending checks")
 		}
@@ -207,8 +211,6 @@ func (c *gerritChecker) pendingLoop() {
 				log.Println("too busy; dropping pending check.")
 			}
 		}
-		// TODO: real rate limiting.
-		time.Sleep(10 * time.Second)
 	}
 }
 
