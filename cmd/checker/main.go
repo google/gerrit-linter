@@ -62,7 +62,7 @@ func main() {
 		g.Authenticator = gerrit.NewBasicAuth(string(content))
 	}
 	if *gcpServiceAccount != "" {
-		g.Authenticator, err := NewGCPServiceAccount(*gcpServiceAccount)
+		g.Authenticator, err = NewGCPServiceAccount(*gcpServiceAccount)
 		if err != nil {
 			log.Fatal(err)
 		}
