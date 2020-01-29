@@ -21,6 +21,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,12 +57,43 @@ func (tc *tokenCache) Authenticate(req *http.Request) error {
 	return nil
 }
 
-// fetch gets the token from the metadata server.
-func (tc *tokenCache) fetch() (*gcpToken, error) {
-	u := fmt.Sprintf("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/%s/token",
-		tc.account)
+// The name of the scope that is necessary to access googlesource.com
+// gerrit instances.
+const gerritScope = "https://www.googleapis.com/auth/gerritcodereview"
 
-	req, err := http.NewRequest("GET", u, nil)
+// scopeURL returns the URL where GCP serves scopes for an account.
+func scopeURL(account string) string {
+	return fmt.Sprintf("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/%s/scopes",
+		account)
+}
+
+// tokenURL returns the URL where GCP serves tokens for an account.
+func tokenURL(account string) string {
+	return fmt.Sprintf("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/%s/token",
+		account)
+}
+
+// fetchScopes returns the scopes for the configured service account.
+func (tc *tokenCache) fetchScopes() ([]string, error) {
+	req, err := http.NewRequest("GET", scopeURL(tc.account), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Metadata-Flavor", "Google")
+
+	resp, err := http.DefaultClient.Do(req.WithContext(context.Background()))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	all, _ := ioutil.ReadAll(resp.Body)
+
+	return strings.Split(strings.TrimSpace(string(all)), "\n"), nil
+}
+
+// fetch gets the token from the metadata server.
+func (tc *tokenCache) fetchToken() (*gcpToken, error) {
+	req, err := http.NewRequest("GET", tokenURL(tc.account), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +107,7 @@ func (tc *tokenCache) fetch() (*gcpToken, error) {
 	all, _ := ioutil.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s failed (%d): %s", req, resp.StatusCode, string(all))
+		return nil, fmt.Errorf("%v failed (%d): %s", req, resp.StatusCode, string(all))
 	}
 
 	tok := &gcpToken{}
@@ -87,13 +119,30 @@ func (tc *tokenCache) fetch() (*gcpToken, error) {
 }
 
 // NewGCPServiceAccount returns a Authenticator that will use GCP
-// bearer-tokens. The tokens are refreshed automatically.
+// bearer-tokens to authenticate against a googlesource.com Gerrit
+// instance. The tokens are refreshed automatically.
 func NewGCPServiceAccount(account string) (gerrit.Authenticator, error) {
 	tc := tokenCache{
 		account: account,
 	}
 
-	tc.current, err := tc.fetch()
+	scopes, err := tc.fetchScopes()
+	if err != nil {
+		return nil, err
+	}
+
+	found := false
+	for _, s := range scopes {
+		if s == gerritScope {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("missing scope %q, got %q", gerritScope, scopes)
+	}
+
+	tc.current, err = tc.fetchToken()
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +157,7 @@ func (tc *tokenCache) loop() {
 	delaySecs := tc.current.ExpiresIn - 1
 	for {
 		time.Sleep(time.Duration(delaySecs) * time.Second)
-		tok, err := tc.fetch()
+		tok, err := tc.fetchToken()
 		if err != nil {
 			log.Printf("fetching token failed:  %s", err)
 			delaySecs = 2
